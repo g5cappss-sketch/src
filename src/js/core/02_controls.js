@@ -1,0 +1,349 @@
+function handleKeyboardRotation(event) {
+      if (!selectedPart || event.repeat) return;
+      if (['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName)) return;
+
+      const key = event.key.toLowerCase();
+      const rotations = {
+        w: { axis: new THREE.Vector3(1, 0, 0), direction: 1 },
+        s: { axis: new THREE.Vector3(1, 0, 0), direction: -1 },
+        a: { axis: new THREE.Vector3(0, 1, 0), direction: 1 },
+        d: { axis: new THREE.Vector3(0, 1, 0), direction: -1 },
+        q: { axis: new THREE.Vector3(0, 0, 1), direction: 1 },
+        e: { axis: new THREE.Vector3(0, 0, 1), direction: -1 },
+        arrowup: { axis: new THREE.Vector3(1, 0, 0), direction: 1 },
+        arrowdown: { axis: new THREE.Vector3(1, 0, 0), direction: -1 },
+        arrowleft: { axis: new THREE.Vector3(0, 1, 0), direction: 1 },
+        arrowright: { axis: new THREE.Vector3(0, 1, 0), direction: -1 }
+      };
+      const rotation = rotations[key];
+      if (!rotation) return;
+
+      event.preventDefault();
+      rotateSelectedByKeyboard(rotation.axis, rotation.direction);
+    }
+
+    function rotateSelectedByKeyboard(axis, direction) {
+      const part = selectedPart;
+      const safe = {
+        position: part.position.clone(),
+        quaternion: part.quaternion.clone(),
+        scale: part.scale.clone()
+      };
+
+      detachMagneticJoints(part);
+      part.rotateOnWorldAxis(axis, direction * Math.PI / 2);
+      settleAssemblyOnGround(part);
+      snapPartPositionToGrid(part);
+
+      if (hasPartCollision(part)) {
+        part.position.copy(safe.position);
+        part.quaternion.copy(safe.quaternion);
+        part.scale.copy(safe.scale);
+        showToast('Không thể xoay xuyên qua linh kiện khác', 'error');
+        return;
+      }
+
+      part.userData.safeTransform = safe;
+      recordHistoryState();
+    }
+
+    function onWindowResize() {
+      const container = document.getElementById('canvas-container');
+      camera.aspect = container.clientWidth / container.clientHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(container.clientWidth, container.clientHeight);
+    }
+
+    // --- THUẬT TOÁN RAYCASTER AN TOÀN TUYỆT ĐỐI (CHỈ TƯƠNG TÁC VỚI PARTS) ---
+    function setupRaycaster() {
+      const canvas = document.getElementById('webgl-canvas');
+      const raycaster = new THREE.Raycaster();
+      const mouse = new THREE.Vector2();
+      const dragPlane = new THREE.Plane();
+      const dragPoint = new THREE.Vector3();
+      const dragOffset = new THREE.Vector3();
+      let isDirectDragging = false;
+      let dragStartPosition = null;
+      let collisionWasBlocked = false;
+
+      function updatePointer(event) {
+        const rect = canvas.getBoundingClientRect();
+        mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+        mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+      }
+
+      function startDirectDrag(part, event) {
+        if (toolMode !== 'select' || part !== selectedPart || pickJoinMode) return false;
+
+        updatePointer(event);
+        raycaster.setFromCamera(mouse, camera);
+        const worldPosition = part.getWorldPosition(new THREE.Vector3());
+        dragPlane.setFromNormalAndCoplanarPoint(camera.getWorldDirection(new THREE.Vector3()), worldPosition);
+        if (!raycaster.ray.intersectPlane(dragPlane, dragPoint)) return false;
+
+        dragOffset.copy(worldPosition).sub(dragPoint);
+        dragStartPosition = part.position.clone();
+        collisionWasBlocked = false;
+        part.userData.liftedAboveAssembly = false;
+        part.userData.magneticReleaseParts = getMagneticPartners(part);
+        part.userData.magneticReleaseOrigin = worldPosition.clone();
+        detachMagneticJoints(part);
+        part.userData.magneticSnapped = false;
+        isDirectDragging = true;
+        controls.enabled = false;
+        canvas.setPointerCapture(event.pointerId);
+        canvas.style.cursor = 'grabbing';
+        part.userData.safeTransform = {
+          position: part.position.clone(),
+          quaternion: part.quaternion.clone(),
+          scale: part.scale.clone()
+        };
+        return true;
+      }
+
+      canvas.addEventListener('pointermove', (event) => {
+        if (!isDirectDragging || !selectedPart) return;
+
+        updatePointer(event);
+        raycaster.setFromCamera(mouse, camera);
+        if (!raycaster.ray.intersectPlane(dragPlane, dragPoint)) return;
+
+        const nextWorldPosition = dragPoint.clone().add(dragOffset);
+        const previousPosition = selectedPart.position.clone();
+        if (selectedPart.parent) {
+          selectedPart.position.copy(selectedPart.parent.worldToLocal(nextWorldPosition));
+        } else {
+          selectedPart.position.copy(nextWorldPosition);
+        }
+        clampPartToGround(selectedPart);
+
+        if (selectedPart.userData.isPin) {
+          const snap = findNearestPinSnap(selectedPart, 2.25);
+          if (snap) {
+            snapPinToHole(selectedPart, snap);
+            collisionWasBlocked = false;
+            return;
+          }
+          if (selectedPart.userData.magneticSnapped) detachMagneticJoints(selectedPart);
+        } else {
+          snapPartPositionToGrid(selectedPart);
+          const snap = findNearestComponentSnap(selectedPart, 2.25);
+          if (snap) {
+            snapComponentToPin(selectedPart, snap);
+            collisionWasBlocked = false;
+            return;
+          }
+          if (selectedPart.userData.magneticSnapped) detachMagneticJoints(selectedPart);
+        }
+
+        if (!selectedPart.userData.magneticSnapped && hasPartCollision(selectedPart, null, true)) {
+          if (!liftPartAboveOverlappingAssembly(selectedPart)) {
+            selectedPart.position.copy(previousPosition);
+            if (!collisionWasBlocked) {
+              showToast('Không thể di chuyển xuyên qua linh kiện khác', 'error');
+              collisionWasBlocked = true;
+            }
+          } else {
+            collisionWasBlocked = false;
+          }
+        } else {
+          collisionWasBlocked = false;
+        }
+      });
+
+      canvas.addEventListener('pointerup', (event) => {
+        if (!isDirectDragging || !selectedPart) return;
+
+        isDirectDragging = false;
+        controls.enabled = true;
+        canvas.releasePointerCapture(event.pointerId);
+        canvas.style.cursor = '';
+
+        if (!selectedPart.userData.magneticSnapped && hasPartCollision(selectedPart, null, true)) {
+          selectedPart.position.copy(dragStartPosition);
+          showToast('Không thể di chuyển xuyên qua linh kiện khác', 'error');
+        } else if (!selectedPart.userData.liftedAboveAssembly) {
+          settleAssemblyOnGround(selectedPart);
+          recordHistoryState();
+        } else {
+          recordHistoryState();
+        }
+        selectedPart.userData.liftedAboveAssembly = false;
+        dragStartPosition = null;
+        collisionWasBlocked = false;
+      });
+
+      canvas.addEventListener('pointerdown', (e) => {
+        // Nếu người dùng đang thao tác kéo trục TransformControls thì không can thiệp raycaster
+        if (transformControls.dragging) return;
+
+        const rect = canvas.getBoundingClientRect();
+        mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+        mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+
+        raycaster.setFromCamera(mouse, camera);
+
+        // QUAN TRỌNG: Chỉ raycast với danh sách parts, loại bỏ GridHelper và Gizmo planes!
+        const intersects = raycaster.intersectObjects(parts, true);
+
+        if (intersects.length > 0) {
+          const hitObj = intersects[0].object;
+
+          // Tìm xem có phải bấm vào nhãn số hay nút mỏ neo socket không
+          let foundSocket = null;
+          let temp = hitObj;
+          while (temp && temp.parent) {
+            if (temp.userData && temp.userData.isSocketNode) {
+              foundSocket = temp.userData;
+              break;
+            }
+            temp = temp.parent;
+          }
+
+          // Leo ngược lên cây phân cấp để tìm gốc part thuộc mảng parts
+          let targetPart = null;
+          temp = hitObj;
+          while (temp) {
+            if (parts.includes(temp)) {
+              targetPart = temp;
+              break;
+            }
+            temp = temp.parent;
+          }
+
+          if (targetPart) {
+            if (pickJoinMode === 'first') {
+              pickedFirstPart = targetPart;
+              updateJoinWizardUI();
+              cancelSnapMode();
+              showToast(`Đã chọn Đối tượng 1: ${targetPart.userData.name}`);
+            } else if (pickJoinMode === 'second') {
+              pickedSecondPart = targetPart;
+              updateJoinWizardUI();
+              cancelSnapMode();
+              showToast(`Đã chọn Đối tượng 2: ${targetPart.userData.name}`);
+            } else {
+              const wasAlreadySelected = targetPart === selectedPart;
+              selectPart(targetPart);
+              if (foundSocket) {
+                showToast(`Đã chọn Lỗ #${foundSocket.index} trên ${targetPart.userData.name}`);
+              }
+              if (wasAlreadySelected) startDirectDrag(targetPart, e);
+            }
+            return;
+          }
+        }
+
+        // Nếu click ra khoảng trống không trúng chi tiết nào và đang ở chế độ 'select'
+        if (!pickJoinMode && toolMode === 'select') {
+          selectPart(null);
+        }
+      });
+    }
+
+    // --- QUẢN LÝ CÔNG CỤ CHỌN / DI CHUYỂN / XOAY (KHÔNG BAO GIỜ BỊ ẨN) ---
+    function setToolMode(mode) {
+      toolMode = mode;
+      ['select', 'translate', 'rotate'].forEach(m => {
+        const btn = document.getElementById('btn-tool-' + m);
+        if (btn) {
+          if (m === mode) {
+            btn.className = 'tool-btn bg-cyan-500 text-slate-950 px-3.5 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all shadow';
+          } else {
+            btn.className = 'tool-btn text-slate-400 hover:text-slate-200 hover:bg-slate-800 px-3.5 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all';
+          }
+        }
+      });
+
+      if (!selectedPart) {
+        transformControls.detach();
+        return;
+      }
+
+      if (mode === 'select') {
+        transformControls.detach();
+      } else {
+        transformControls.attach(selectedPart);
+        transformControls.setMode(mode === 'rotate' ? 'rotate' : 'translate');
+      }
+    }
+
+    // --- BỔ SUNG: HỆ THỐNG ĐIỀU KHIỂN GÓC NHÌN CAMERA MƯỢT MÀ (ĐÃ FIX LỖI KHỰNG/GIẬT ZOOM) ---
+    let cameraAnimationId = null;
+
+    function smoothMoveCamera(targetPosition, targetLookAt, duration = 800) {
+      if (cameraAnimationId) cancelAnimationFrame(cameraAnimationId);
+
+      // Tạm khóa điều khiển chuột (OrbitControls) để không xung đột với vòng lặp animation
+      controls.enabled = false; 
+
+      const startPos = camera.position.clone();
+      const endPos = targetPosition.clone();
+      const startTarget = controls.target.clone();
+      const endTarget = targetLookAt.clone();
+      
+      const startTime = performance.now();
+
+      function animateCamera(time) {
+        // Đồng bộ chuẩn xác với tần số quét màn hình (60hz/144hz)
+        const currentTime = time || performance.now();
+        const elapsed = currentTime - startTime;
+        let t = Math.min(elapsed / duration, 1);
+
+        // Công thức Easing (Cubic In-Out): Khởi đầu êm ái, bay nhanh ở giữa, phanh mềm ở đích
+        const easeT = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+
+        // Nội suy tọa độ
+        camera.position.lerpVectors(startPos, endPos, easeT);
+        controls.target.lerpVectors(startTarget, endTarget, easeT);
+        
+        // Ép camera cập nhật góc xoay nhìn về đích
+        camera.lookAt(controls.target);
+        controls.update();
+
+        if (t < 1) {
+          cameraAnimationId = requestAnimationFrame(animateCamera);
+        } else {
+          // Bật lại điều khiển chuột khi đã đến đích thành công
+          controls.enabled = true; 
+          cameraAnimationId = null;
+        }
+      }
+      
+      cameraAnimationId = requestAnimationFrame(animateCamera);
+    }
+
+    function setIsoView() {
+      const center = controls.target.clone();
+      const dist = camera.position.distanceTo(center) || 30;
+      
+      // SỬA LỖI GIẬT ZOOM: Dùng Normalize để giữ khoảng cách (Bán kính) luôn tuyệt đối bằng nhau
+      const direction = new THREE.Vector3(1, 1, 1).normalize();
+      const targetPos = center.clone().addScaledVector(direction, dist);
+      
+      smoothMoveCamera(targetPos, center, 800);
+      showToast("Đã chuyển góc nhìn 3D (Iso)");
+    }
+
+    function setTopView() {
+      const center = controls.target.clone();
+      const dist = camera.position.distanceTo(center) || 30;
+      
+      // Tránh lật ngược camera bằng cách lệch trục Z đi 0.001
+      const direction = new THREE.Vector3(0, 1, 0.001).normalize();
+      const targetPos = center.clone().addScaledVector(direction, dist);
+      
+      smoothMoveCamera(targetPos, center, 800);
+      showToast("Đã chuyển góc nhìn từ trên xuống (Top)");
+    }
+
+    function setFrontView() {
+      const center = controls.target.clone();
+      const dist = camera.position.distanceTo(center) || 30;
+      
+      const direction = new THREE.Vector3(0, 0, 1).normalize();
+      const targetPos = center.clone().addScaledVector(direction, dist);
+      
+      smoothMoveCamera(targetPos, center, 800);
+      showToast("Đã chuyển góc nhìn ngang (Front)");
+    }

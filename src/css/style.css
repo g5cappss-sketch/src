@@ -1,0 +1,39 @@
+    body { margin: 0; overflow: hidden; background-color: #000; font-family: system-ui, -apple-system, sans-serif; }
+    .custom-scrollbar::-webkit-scrollbar { width: 5px; height: 5px; }
+    .custom-scrollbar::-webkit-scrollbar-track { background: rgba(15, 23, 42, 0.6); }
+    .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(56, 189, 248, 0.35); border-radius: 4px; }
+    .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(56, 189, 248, 0.6); }
+
+    .assembly-history-bottom {
+    position: absolute;
+    bottom: 7.5rem; /* Khoảng cách an toàn khi thanh bên dưới rớt thành 2 dòng */
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    gap: 0.5rem;
+    z-index: 10;
+}
+    .history-navigation-button {
+      background: rgba(15, 23, 42, 0.9);
+      backdrop-filter: blur(8px);
+      border: 1px solid rgba(51, 65, 85, 0.8);
+      color: #94a3b8;
+      padding: 0.35rem 0.85rem;
+      border-radius: 0.75rem;
+      font-size: 0.75rem;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+      transition: all 0.2s ease;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+    }
+    .history-navigation-button:hover:not(:disabled) {
+      color: #38bdf8;
+      border-color: rgba(56, 189, 248, 0.5);
+      background: rgba(30, 41, 59, 0.95);
+    }
+    .history-navigation-button:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
