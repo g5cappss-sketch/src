@@ -71,6 +71,8 @@
       joints.push({ id: jointId, partA: pickedFirstPart, partB: pickedSecondPart, socketA: h1, socketB: h2, pin: jointPin || null });
 
       settleAssemblyOnGround(pickedFirstPart);
+      lockIntoAssembly(pickedFirstPart, pickedSecondPart);
+      if (jointPin) lockIntoAssembly(pickedFirstPart, jointPin);
       updateJointsUI();
       recordHistoryState();
       showToast(`Đã ghép Lỗ #${h1.index} với Lỗ #${h2.index}`);

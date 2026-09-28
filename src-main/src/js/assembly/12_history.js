@@ -1,14 +1,19 @@
 // 1. Ghi lại trạng thái lịch sử
     function recordHistoryState() {
-      const state = parts.map(p => ({
-        id: p.userData.id,
-        kind: inferPartKind(p),
-        name: p.userData.name,
-        pos: p.position.clone(),
-        rot: p.rotation.clone(),
-        color: p.userData.color,
-        holesCount: (p.userData.holes || []).length
-      }));
+      const state = parts.map(p => {
+        const assemblyGroup = p.parent?.userData.isAssemblyGroup ? p.parent : null;
+        return {
+          id: p.userData.id,
+          kind: inferPartKind(p),
+          name: p.userData.name,
+          pos: p.position.clone(),
+          rot: p.rotation.clone(),
+          assemblyPos: assemblyGroup?.position.clone() || null,
+          assemblyRot: assemblyGroup?.rotation.clone() || null,
+          color: p.userData.color,
+          holesCount: (p.userData.holes || []).length
+        };
+      });
 
       // Cắt bỏ nhánh tương lai nếu người dùng đang Undo mà lại thực hiện hành động mới
       history = history.slice(0, historyIndex + 1);
@@ -65,6 +70,10 @@
 
         part.position.copy(saved.pos);
         part.rotation.copy(saved.rot);
+        if (saved.assemblyPos && part.parent?.userData.isAssemblyGroup) {
+          part.parent.position.copy(saved.assemblyPos);
+          part.parent.rotation.copy(saved.assemblyRot);
+        }
         if (saved.color != null && part.userData) part.userData.color = saved.color;
         if (saved.name && part.userData) part.userData.name = saved.name;
         if (saved.holesCount && part.userData) part.userData.holesCount = saved.holesCount;

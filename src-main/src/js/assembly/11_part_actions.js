@@ -18,9 +18,9 @@
       if (!selectedPart) return;
       const partToDelete = selectedPart;
       selectPart(null);
-      scene.remove(partToDelete);
+        partToDelete.parent?.remove(partToDelete);
       parts = parts.filter(p => p !== partToDelete);
-      joints = joints.filter(j => j.partA !== partToDelete && j.partB !== partToDelete);
+        joints = joints.filter(j => j.partA !== partToDelete && j.partB !== partToDelete && j.pin !== partToDelete);
       if (pickedFirstPart === partToDelete) pickedFirstPart = null;
       if (pickedSecondPart === partToDelete) pickedSecondPart = null;
       updateJoinWizardUI();

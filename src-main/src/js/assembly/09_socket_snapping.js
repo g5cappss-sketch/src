@@ -14,7 +14,7 @@
       if (socket.dir !== 'vertical' || Math.abs(socket.y) < 0.001) return surfacePosition;
 
       const inwardOffset = new THREE.Vector3(0, socket.y * 2, 0)
-        .applyQuaternion(part.quaternion);
+        .applyQuaternion(part.getWorldQuaternion(new THREE.Quaternion()));
       return surfacePosition.sub(inwardOffset);
     }
 
@@ -296,11 +296,7 @@
     }
 
     function snapComponentToPin(part, snap) {
-      const desiredWorldQuaternion = snap.pin.getWorldQuaternion(new THREE.Quaternion());
-      const isHorizontal = snap.componentSocket && (snap.componentSocket.dir === 'horizontal' || snap.componentSocket.type === 'horizontal');
-      if (isHorizontal) {
-        desiredWorldQuaternion.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2));
-      }
+      const desiredWorldQuaternion = part.getWorldQuaternion(new THREE.Quaternion());
 
       const rotatedHole = getLocalComponentSnapPosition(snap.componentSocket, snap.pinSocket)
         .applyQuaternion(desiredWorldQuaternion);

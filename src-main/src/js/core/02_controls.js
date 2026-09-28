@@ -24,26 +24,28 @@ function handleKeyboardRotation(event) {
 
     function rotateSelectedByKeyboard(axis, direction) {
       const part = selectedPart;
+      const isGrouped = part.parent?.userData.isAssemblyGroup;
+      const transformTarget = isGrouped ? part.parent : part;
       const safe = {
-        position: part.position.clone(),
-        quaternion: part.quaternion.clone(),
-        scale: part.scale.clone()
+        position: transformTarget.position.clone(),
+        quaternion: transformTarget.quaternion.clone(),
+        scale: transformTarget.scale.clone()
       };
 
-      detachMagneticJoints(part);
-      part.rotateOnWorldAxis(axis, direction * Math.PI / 2);
-      settleAssemblyOnGround(part);
-      snapPartPositionToGrid(part);
+      if (!isGrouped) detachMagneticJoints(part);
+      transformTarget.rotateOnWorldAxis(axis, direction * Math.PI / 2);
+      settleAssemblyOnGround(transformTarget);
+      snapPartPositionToGrid(transformTarget);
 
       if (hasPartCollision(part)) {
-        part.position.copy(safe.position);
-        part.quaternion.copy(safe.quaternion);
-        part.scale.copy(safe.scale);
+        transformTarget.position.copy(safe.position);
+        transformTarget.quaternion.copy(safe.quaternion);
+        transformTarget.scale.copy(safe.scale);
         showToast('Không thể xoay xuyên qua linh kiện khác', 'error');
         return;
       }
 
-      part.userData.safeTransform = safe;
+      transformTarget.userData.safeTransform = safe;
       recordHistoryState();
     }
 

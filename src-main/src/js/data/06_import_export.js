@@ -369,3 +369,23 @@ const STORAGE_KEY = 'zmrobo_system_models_v1';
         showToast(`Đã xuất file ${fileName}`);
       }, { binary: true });
     }
+    gltf.scene.traverse((child) => {
+      // Tìm các đối tượng được đánh dấu làm socket từ phần mềm 3D
+      if (child.isObject3D && child.name.startsWith('SOCKET_HOLE_')) {
+        
+        // Phân định hướng dựa vào tên: Chứa '_H_' là Ngang, còn lại là Đứng
+        const isHorizontal = child.name.includes('_H_');
+        
+        // Lấy tọa độ thế giới/cục bộ của socket
+        const position = child.position.clone();
+
+        sockets.push({
+          index: sockets.length + 1,
+          x: position.x,
+          y: position.y,
+          z: position.z,
+          dir: isHorizontal ? 'horizontal' : 'vertical', // Báo cho thuật toán hít chốt biết hướng
+          desc: isHorizontal ? 'Lỗ ngang' : 'Lỗ đứng'
+        });
+      }
+    });

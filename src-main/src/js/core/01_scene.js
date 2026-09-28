@@ -40,39 +40,41 @@
       transformControls.addEventListener('dragging-changed', (e) => { 
         controls.enabled = !e.value; 
         if (selectedPart) {
+          const transformTarget = selectedPart.parent?.userData.isAssemblyGroup ? selectedPart.parent : selectedPart;
           if (e.value) {
-            selectedPart.userData.safeTransform = {
-              position: selectedPart.position.clone(),
-              quaternion: selectedPart.quaternion.clone(),
-              scale: selectedPart.scale.clone()
+            transformTarget.userData.safeTransform = {
+              position: transformTarget.position.clone(),
+              quaternion: transformTarget.quaternion.clone(),
+              scale: transformTarget.scale.clone()
             };
           } else if (hasPartCollision(selectedPart)) {
-            const safe = selectedPart.userData.safeTransform || { position: selectedPart.position.clone(), quaternion: selectedPart.quaternion.clone(), scale: selectedPart.scale.clone() };
-            selectedPart.position.copy(safe.position);
-            selectedPart.quaternion.copy(safe.quaternion);
-            selectedPart.scale.copy(safe.scale);
+            const safe = transformTarget.userData.safeTransform || { position: transformTarget.position.clone(), quaternion: transformTarget.quaternion.clone(), scale: transformTarget.scale.clone() };
+            transformTarget.position.copy(safe.position);
+            transformTarget.quaternion.copy(safe.quaternion);
+            transformTarget.scale.copy(safe.scale);
             showToast("Không thể di chuyển xuyên qua linh kiện khác", "error");
           }
         }
       });
       transformControls.addEventListener('objectChange', () => { 
         if (selectedPart) {
-          settleAssemblyOnGround(selectedPart);
-          snapPartPositionToGrid(selectedPart);
+          const transformTarget = selectedPart.parent?.userData.isAssemblyGroup ? selectedPart.parent : selectedPart;
+          settleAssemblyOnGround(transformTarget);
+          snapPartPositionToGrid(transformTarget);
           if (hasPartCollision(selectedPart)) {
-            const safe = selectedPart.userData.safeTransform || { position: selectedPart.position.clone(), quaternion: selectedPart.quaternion.clone(), scale: selectedPart.scale.clone() };
-            selectedPart.position.copy(safe.position);
-            selectedPart.quaternion.copy(safe.quaternion);
-            selectedPart.scale.copy(safe.scale);
+            const safe = transformTarget.userData.safeTransform || { position: transformTarget.position.clone(), quaternion: transformTarget.quaternion.clone(), scale: transformTarget.scale.clone() };
+            transformTarget.position.copy(safe.position);
+            transformTarget.quaternion.copy(safe.quaternion);
+            transformTarget.scale.copy(safe.scale);
             showToast("Không thể di chuyển xuyên qua linh kiện khác", "error");
             return;
           }
-          selectedPart.userData.safeTransform = {
-            position: selectedPart.position.clone(),
-            quaternion: selectedPart.quaternion.clone(),
-            scale: selectedPart.scale.clone()
+          transformTarget.userData.safeTransform = {
+            position: transformTarget.position.clone(),
+            quaternion: transformTarget.quaternion.clone(),
+            scale: transformTarget.scale.clone()
           };
-          clampPartToGround(selectedPart);
+          clampPartToGround(transformTarget);
         }
         recordHistoryState(); 
       });

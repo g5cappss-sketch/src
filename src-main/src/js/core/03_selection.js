@@ -107,6 +107,16 @@
         canvas.releasePointerCapture(event.pointerId);
         canvas.style.cursor = '';
 
+        if (!selectedPart.userData.magneticSnapped) {
+          if (selectedPart.userData.isPin) {
+            const snap = findNearestPinSnap(selectedPart, 2.25);
+            if (snap) snapPinToHole(selectedPart, snap);
+          } else {
+            const snap = findNearestComponentSnap(selectedPart, 2.25);
+            if (snap) snapComponentToPin(selectedPart, snap);
+          }
+        }
+
         // ĐÂY LÀ CHÌA KHÓA: Chỉ khóa cứng cụm lại với nhau khi bạn ĐÃ NHẢ CHUỘT
         if (selectedPart.userData.magneticSnapped) {
            const joint = joints.find(j => j.id === selectedPart.userData.magneticJointId);
@@ -207,7 +217,8 @@
         document.getElementById('inspect-sockets-count').innerText = (part.userData.holes || []).length;
 
         if (toolMode !== 'select') {
-          transformControls.attach(part);
+          const transformTarget = part.parent?.userData.isAssemblyGroup ? part.parent : part;
+          transformControls.attach(transformTarget);
           transformControls.setMode(toolMode === 'rotate' ? 'rotate' : 'translate');
         } else {
           transformControls.detach();
