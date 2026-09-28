@@ -1,10 +1,10 @@
 // 1. Ghi lại trạng thái lịch sử
     function recordHistoryState() {
+      const hasKinematicHierarchy = Boolean(rotationPivotGroup);
       const state = parts.map(p => {
         const assemblyGroup = p.parent?.userData.isAssemblyGroup ? p.parent : null;
-        const hasTemporaryPivot = assemblyGroup?.userData.isRotationPivotGroup;
-        const worldPosition = hasTemporaryPivot ? p.getWorldPosition(new THREE.Vector3()) : null;
-        const worldRotation = hasTemporaryPivot
+        const worldPosition = hasKinematicHierarchy ? p.getWorldPosition(new THREE.Vector3()) : null;
+        const worldRotation = hasKinematicHierarchy
           ? new THREE.Euler().setFromQuaternion(p.getWorldQuaternion(new THREE.Quaternion()))
           : null;
         return {
@@ -13,8 +13,9 @@
           name: p.userData.name,
           pos: worldPosition || p.position.clone(),
           rot: worldRotation || p.rotation.clone(),
-          assemblyPos: hasTemporaryPivot ? null : assemblyGroup?.position.clone() || null,
-          assemblyRot: hasTemporaryPivot ? null : assemblyGroup?.rotation.clone() || null,
+          worldSpace: hasKinematicHierarchy,
+          assemblyPos: hasKinematicHierarchy ? null : assemblyGroup?.position.clone() || null,
+          assemblyRot: hasKinematicHierarchy ? null : assemblyGroup?.rotation.clone() || null,
           color: p.userData.color,
           holesCount: (p.userData.holes || []).length
         };
@@ -54,6 +55,16 @@
     function restoreHistoryState(state) {
       restoreRotationPivot();
       const snapshot = Array.isArray(state) ? state : [];
+      const restoreWorldSpace = snapshot.some(saved => saved.worldSpace);
+      if (restoreWorldSpace) {
+        const oldGroups = new Set(parts
+          .map(part => part.parent)
+          .filter(parent => parent?.userData.isAssemblyGroup && !parent.userData.isRotationPivotGroup));
+        oldGroups.forEach(group => {
+          [...group.children].forEach(child => scene.attach(child));
+          group.parent?.remove(group);
+        });
+      }
       const snapshotIds = new Set(snapshot.map(s => s.id));
 
       const partsToRemove = parts.filter(part => !snapshotIds.has(part.userData.id));
@@ -73,9 +84,10 @@
 
         if (!part) return;
 
+        if (saved.worldSpace) scene.attach(part);
         part.position.copy(saved.pos);
         part.rotation.copy(saved.rot);
-        if (saved.assemblyPos && part.parent?.userData.isAssemblyGroup) {
+        if (!saved.worldSpace && saved.assemblyPos && part.parent?.userData.isAssemblyGroup) {
           part.parent.position.copy(saved.assemblyPos);
           part.parent.rotation.copy(saved.assemblyRot);
         }
@@ -84,6 +96,7 @@
         if (saved.holesCount && part.userData) part.userData.holesCount = saved.holesCount;
       });
 
+      if (restoreWorldSpace) reconcileRigidAssemblies();
       updatePartsCount();
       updateJoinWizardUI();
       updateJointsUI();

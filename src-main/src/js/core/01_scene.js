@@ -47,7 +47,7 @@
               quaternion: transformTarget.quaternion.clone(),
               scale: transformTarget.scale.clone()
             };
-          } else if (hasPartCollision(selectedPart)) {
+          } else if (!transformTarget.userData.isRotationPivotGroup && hasPartCollision(selectedPart)) {
             const safe = transformTarget.userData.safeTransform || { position: transformTarget.position.clone(), quaternion: transformTarget.quaternion.clone(), scale: transformTarget.scale.clone() };
             transformTarget.position.copy(safe.position);
             transformTarget.quaternion.copy(safe.quaternion);
@@ -63,7 +63,7 @@
             settleAssemblyOnGround(transformTarget);
             snapPartPositionToGrid(transformTarget);
           }
-          if (hasPartCollision(selectedPart)) {
+          if (!transformTarget.userData.isRotationPivotGroup && hasPartCollision(selectedPart)) {
             const safe = transformTarget.userData.safeTransform || { position: transformTarget.position.clone(), quaternion: transformTarget.quaternion.clone(), scale: transformTarget.scale.clone() };
             transformTarget.position.copy(safe.position);
             transformTarget.quaternion.copy(safe.quaternion);

@@ -9,10 +9,6 @@ function handleKeyboardRotation(event) {
           showToast('Chọn thanh đã ghép với chốt trước', 'error');
           return;
         }
-        if (!isManualJointRotationMode && isPartLockedByMultiplePins(selectedPart)) {
-          showToast('Thanh đã bị khóa bằng hai chốt, không thể xoay riêng', 'error');
-          return;
-        }
 
         isManualJointRotationMode = !isManualJointRotationMode;
         if (isManualJointRotationMode) setToolMode('select');
@@ -60,12 +56,7 @@ function handleKeyboardRotation(event) {
 
       if (!isGrouped && !isPivot) detachMagneticJoints(part);
       transformTarget.rotateOnWorldAxis(axis, direction * Math.PI / 2);
-      if (!isPivot) {
-        settleAssemblyOnGround(transformTarget);
-        snapPartPositionToGrid(transformTarget);
-      }
-
-      if (hasPartCollision(part)) {
+      if (!isPivot && hasPartCollision(part)) {
         transformTarget.position.copy(safe.position);
         transformTarget.quaternion.copy(safe.quaternion);
         transformTarget.scale.copy(safe.scale);
@@ -78,21 +69,24 @@ function handleKeyboardRotation(event) {
     }
 
     function getSelectedMagneticJoint() {
-      return joints.find(j => j.pin && getPinParticipants(j.pin).has(selectedPart) && getPinParticipants(j.pin).size > 1);
+      return joints.find(j => j.pin && j.kinematicChild === selectedPart) ||
+        joints.find(j => j.pin && (j.partA === selectedPart || j.partB === selectedPart));
     }
 
     function isPartLockedByMultiplePins(part) {
-      return getConnectedPins(part)
-        .filter(pin => getPinParticipants(pin).size > 1).length >= 2;
+      const pinsByPartner = new Map();
+      getConnectedPins(part).forEach(pin => {
+        getPinParticipants(pin).forEach(partner => {
+          if (partner === part) return;
+          if (!pinsByPartner.has(partner)) pinsByPartner.set(partner, new Set());
+          pinsByPartner.get(partner).add(pin);
+        });
+      });
+      return [...pinsByPartner.values()].some(pins => pins.size >= 2);
     }
 
     function rotateSelectedAroundJointAxis(direction, stepDegrees = 1) {
       const part = selectedPart;
-      if (isPartLockedByMultiplePins(part)) {
-        showToast('Thanh đã bị khóa bằng hai chốt, không thể xoay riêng', 'error');
-        return;
-      }
-
       const joint = getSelectedMagneticJoint();
       if (!joint) {
         showToast('Chi tiết chưa được ghép bằng chốt', 'error');
@@ -101,33 +95,31 @@ function handleKeyboardRotation(event) {
 
       const pin = joint.pin;
       pin.updateMatrixWorld(true);
+      const pivot = pin.getWorldPosition(new THREE.Vector3());
       const axis = new THREE.Vector3(0, 1, 0)
         .applyQuaternion(pin.getWorldQuaternion(new THREE.Quaternion()))
         .normalize();
       const angle = direction * stepDegrees * Math.PI / 180;
       const rotation = new THREE.Quaternion().setFromAxisAngle(axis, angle);
-      const pivotGroup = createRotationPivot(part);
+      const kinematicRoot = createRotationPivot(part, 'rotate');
 
-      if (pivotGroup) {
-        pivotGroup.rotateOnWorldAxis(axis, angle);
-        pivotGroup.updateMatrixWorld(true);
+      const rotationTarget = kinematicRoot || (part.parent?.userData.isAssemblyGroup && !part.parent.userData.isRotationPivotGroup
+        ? part.parent
+        : part);
+      const worldPosition = rotationTarget.getWorldPosition(new THREE.Vector3());
+      const worldQuaternion = rotationTarget.getWorldQuaternion(new THREE.Quaternion());
+      const desiredPosition = worldPosition.sub(pivot).applyQuaternion(rotation).add(pivot);
+      const desiredQuaternion = rotation.multiply(worldQuaternion);
+      const parent = rotationTarget.parent;
+      if (parent) {
+        parent.updateMatrixWorld(true);
+        rotationTarget.position.copy(parent.worldToLocal(desiredPosition));
+        rotationTarget.quaternion.copy(parent.getWorldQuaternion(new THREE.Quaternion()).invert().multiply(desiredQuaternion));
       } else {
-        const pivot = pin.getWorldPosition(new THREE.Vector3());
-        const worldPosition = part.getWorldPosition(new THREE.Vector3());
-        const worldQuaternion = part.getWorldQuaternion(new THREE.Quaternion());
-        const desiredWorldPosition = worldPosition.sub(pivot).applyQuaternion(rotation).add(pivot);
-        const desiredWorldQuaternion = rotation.multiply(worldQuaternion);
-        if (part.parent) {
-          part.parent.updateMatrixWorld(true);
-          part.position.copy(part.parent.worldToLocal(desiredWorldPosition));
-          const parentQuaternion = part.parent.getWorldQuaternion(new THREE.Quaternion());
-          part.quaternion.copy(parentQuaternion.invert().multiply(desiredWorldQuaternion));
-        } else {
-          part.position.copy(desiredWorldPosition);
-          part.quaternion.copy(desiredWorldQuaternion);
-        }
-        part.updateMatrixWorld(true);
+        rotationTarget.position.copy(desiredPosition);
+        rotationTarget.quaternion.copy(desiredQuaternion);
       }
+      rotationTarget.updateMatrixWorld(true);
       recordHistoryState();
     }
 

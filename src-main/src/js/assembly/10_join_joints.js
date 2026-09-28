@@ -64,7 +64,16 @@ function getNonOverlapJoinOffset(partA, partB, h1, h2) {
       jointPin.userData.joinedParts = [pickedFirstPart, pickedSecondPart];
 
       const jointId = 'joint_' + Date.now();
-      joints.push({ id: jointId, partA: pickedFirstPart, partB: pickedSecondPart, socketA: h1, socketB: h2, pin: jointPin });
+      joints.push({
+        id: jointId,
+        partA: pickedFirstPart,
+        partB: pickedSecondPart,
+        socketA: h1,
+        socketB: h2,
+        pin: jointPin,
+        kinematicParent: pickedFirstPart,
+        kinematicChild: pickedSecondPart
+      });
 
       settleAssemblyOnGround(pickedFirstPart);
       lockIntoAssembly(pickedFirstPart, pickedSecondPart);

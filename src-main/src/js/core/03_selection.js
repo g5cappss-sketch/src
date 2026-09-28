@@ -11,6 +11,8 @@
       let jointRotationLastX = 0;
       let jointRotationRemainder = 0;
       let dragStartPosition = null;
+      let dragStartQuaternion = null;
+      let directDragIsKinematic = false;
       let collisionWasBlocked = false;
 
       function updatePointer(event) {
@@ -30,19 +32,13 @@
         if (!raycaster.ray.intersectPlane(dragPlane, dragPoint)) return false;
 
         dragOffset.copy(worldPosition).sub(dragPoint);
+        dragStartPosition = worldPosition.clone();
+        dragStartQuaternion = part.getWorldQuaternion(new THREE.Quaternion());
         collisionWasBlocked = false;
         if (part.userData) part.userData.liftedAboveAssembly = false;
-        
-        const isGrouped = part.parent && part.parent.userData.isAssemblyGroup;
 
-        // Nếu KHÔNG nằm trong cụm cứng, mới cắt đứt liên kết nam châm để kéo đi
-        if (!isGrouped) {
-           part.userData.magneticReleaseParts = getMagneticPartners(part);
-           part.userData.magneticReleaseOrigin = worldPosition.clone();
-           detachMagneticJoints(part);
-           part.userData.magneticSnapped = false;
-        }
-        
+        directDragIsKinematic = Boolean(createRotationPivot(part) ||
+          (part.parent?.userData.isAssemblyGroup && !part.parent.userData.isRotationPivotGroup));
         isDirectDragging = true;
         controls.enabled = false;
         canvas.setPointerCapture(event.pointerId);
@@ -83,25 +79,23 @@
 
         const nextWorldPosition = dragPoint.clone().add(dragOffset);
         const previousWorldPosition = selectedPart.getWorldPosition(new THREE.Vector3());
-        const isGrouped = selectedPart.parent && selectedPart.parent.userData.isAssemblyGroup;
+        const isGrouped = directDragIsKinematic || (selectedPart.parent && selectedPart.parent.userData.isAssemblyGroup);
 
-        // Dịch chuyển mượt mà tự động nhận diện Cụm hoặc Đơn lẻ
         movePartToDesiredWorld(selectedPart, nextWorldPosition, selectedPart.getWorldQuaternion(new THREE.Quaternion()));
 
         if (!isGrouped && typeof clampPartToGround === 'function') {
           clampPartToGround(selectedPart);
         }
 
-        if (selectedPart.userData.isPin) {
+        if (!directDragIsKinematic && selectedPart.userData.isPin) {
           const snap = findNearestPinSnap(selectedPart, 2.25);
-          // Ngăn không cho hít lại vào linh kiện đang chung cụm với mình
           if (snap && (!isGrouped || snap.targetPart.parent !== selectedPart.parent)) {
             snapPinToHole(selectedPart, snap);
             collisionWasBlocked = false;
             return;
           }
           if (!isGrouped && selectedPart.userData.magneticSnapped) detachMagneticJoints(selectedPart);
-        } else {
+        } else if (!directDragIsKinematic && !selectedPart.userData.isPin) {
           if (!isGrouped && typeof snapPartPositionToGrid === 'function') snapPartPositionToGrid(selectedPart);
           const snap = findNearestComponentSnap(selectedPart, 2.25);
           if (snap && (!isGrouped || snap.pin.parent !== selectedPart.parent)) {
@@ -113,7 +107,7 @@
         }
 
         selectedPart.updateMatrixWorld(true);
-        if (!selectedPart.userData.magneticSnapped && typeof hasPartCollision === 'function' && hasPartCollision(selectedPart, null, true)) {
+        if (!selectedPart.userData.magneticSnapped && !directDragIsKinematic && typeof hasPartCollision === 'function' && hasPartCollision(selectedPart, null, true)) {
            // Lùi lại vị trí cũ nếu va chạm an toàn
            movePartToDesiredWorld(selectedPart, previousWorldPosition, selectedPart.getWorldQuaternion(new THREE.Quaternion()));
            if (!collisionWasBlocked) {
@@ -131,16 +125,18 @@
           controls.enabled = true;
           if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
           canvas.style.cursor = '';
+          restoreRotationPivot();
           return;
         }
         if (!isDirectDragging || !selectedPart) return;
 
+        const wasKinematicDrag = directDragIsKinematic;
         isDirectDragging = false;
         controls.enabled = true;
         canvas.releasePointerCapture(event.pointerId);
         canvas.style.cursor = '';
 
-        if (!selectedPart.userData.magneticSnapped) {
+        if (!wasKinematicDrag && !selectedPart.userData.magneticSnapped) {
           if (selectedPart.userData.isPin) {
             const snap = findNearestPinSnap(selectedPart, 2.25);
             if (snap) snapPinToHole(selectedPart, snap);
@@ -150,15 +146,25 @@
           }
         }
 
-        // ĐÂY LÀ CHÌA KHÓA: Chỉ khóa cứng cụm lại với nhau khi bạn ĐÃ NHẢ CHUỘT
-        if (selectedPart.userData.magneticSnapped) {
-           const joint = joints.find(j => j.id === selectedPart.userData.magneticJointId);
-           if (joint) {
-             lockIntoAssembly(joint.partA, joint.partB);
-             if (typeof showToast === 'function') showToast('Đã hít chặt thành khối rắn!');
-           }
+        if (!wasKinematicDrag && selectedPart.userData.magneticSnapped) {
+          const joint = joints.find(j => j.id === selectedPart.userData.magneticJointId);
+          if (joint) lockIntoAssembly(joint.partA, joint.partB);
         }
 
+        if (wasKinematicDrag) restoreRotationPivot();
+        directDragIsKinematic = false;
+
+        if (!wasKinematicDrag && !selectedPart.userData.magneticSnapped && hasPartCollision(selectedPart, null, true)) {
+          movePartToDesiredWorld(selectedPart, dragStartPosition, dragStartQuaternion);
+          showToast('Không thể di chuyển xuyên qua linh kiện khác', 'error');
+        } else if (!wasKinematicDrag && !selectedPart.userData.liftedAboveAssembly) {
+          settleAssemblyOnGround(selectedPart);
+        }
+
+        if (wasKinematicDrag || selectedPart.userData.magneticSnapped) recordHistoryState();
+        selectedPart.userData.liftedAboveAssembly = false;
+        dragStartPosition = null;
+        dragStartQuaternion = null;
         collisionWasBlocked = false;
       });
       
@@ -198,11 +204,6 @@
 
           if (targetPart) {
             if (isManualJointRotationMode && targetPart === selectedPart) {
-              if (isPartLockedByMultiplePins(targetPart)) {
-                isManualJointRotationMode = false;
-                showToast('Thanh đã bị khóa bằng hai chốt, không thể xoay riêng', 'error');
-                return;
-              }
               startJointRotationDrag(e);
               return;
             }

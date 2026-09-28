@@ -175,6 +175,7 @@ function getWorldSocketPosition(part, socket) {
 
     let rotationPivotGroup = null;
     let rotationPivotPart = null;
+    let rotationPivotParents = new Map();
 
     function getConnectedPins(part) {
       return [...new Set(joints.map(joint => joint.pin)
@@ -195,41 +196,114 @@ function getWorldSocketPosition(part, socket) {
     function restoreRotationPivot() {
       if (!rotationPivotGroup) return;
 
-      rotationPivotGroup.children.slice().forEach(member => scene.attach(member));
+      [...rotationPivotParents.entries()].reverse().forEach(([member, originalParent]) => {
+        if (originalParent?.parent) originalParent.attach(member);
+        else scene.attach(member);
+      });
       rotationPivotGroup.parent?.remove(rotationPivotGroup);
       rotationPivotGroup = null;
       rotationPivotPart = null;
+      rotationPivotParents.clear();
     }
 
-    function createRotationPivot(part) {
+    function createRotationPivot(part, mode = toolMode) {
       if (rotationPivotGroup && rotationPivotPart === part) return rotationPivotGroup;
       restoreRotationPivot();
 
-      const connectedPins = getConnectedPins(part);
-      const sharedPins = connectedPins.filter(pin => getPinParticipants(pin).size > 1);
-      if (sharedPins.length > 1 || (sharedPins.length === 0 && connectedPins.length === 0)) return null;
+      const getNode = object => object?.parent?.userData.isAssemblyGroup &&
+        !object.parent.userData.isRotationPivotGroup ? object.parent : object;
+      const adjacency = new Map();
+      const connected = new Map();
+      const incomingPivotPins = new Map();
+      const connect = (parent, child) => {
+        if (!parent || !child || parent === child) return;
+        if (!adjacency.has(parent)) adjacency.set(parent, new Set());
+        adjacency.get(parent).add(child);
+        if (!connected.has(parent)) connected.set(parent, new Set());
+        if (!connected.has(child)) connected.set(child, new Set());
+        connected.get(parent).add(child);
+        connected.get(child).add(parent);
+      };
 
-      const pivotPin = sharedPins[0] || null;
+      joints.forEach(joint => {
+        const pin = getNode(joint.pin);
+        const explicitParent = joint.kinematicParent;
+        const explicitChild = joint.kinematicChild;
+        if (explicitParent && explicitChild) {
+          const parent = getNode(explicitParent);
+          const child = getNode(explicitChild);
+          if (joint.pin && joint.pin !== explicitParent && joint.pin !== explicitChild) {
+            connect(parent, pin);
+            connect(pin, child);
+            incomingPivotPins.set(child, joint.pin);
+          } else {
+            connect(parent, child);
+            if (joint.pin === explicitParent) incomingPivotPins.set(child, joint.pin);
+          }
+          return;
+        }
+
+        const first = getNode(joint.partA);
+        const second = getNode(joint.partB);
+        if (!pin) {
+          connect(first, second);
+        } else if (joint.pin === joint.partA) {
+          if (joint.pin.userData?.magneticJointId === joint.id) connect(second, pin);
+          else if (joint.pin.userData?.magneticJointId) {
+            connect(pin, second);
+            incomingPivotPins.set(second, joint.pin);
+          } else connect(second, pin);
+        } else if (joint.pin === joint.partB) {
+          if (joint.pin.userData?.magneticJointId === joint.id) connect(first, pin);
+          else if (joint.pin.userData?.magneticJointId) {
+            connect(pin, first);
+            incomingPivotPins.set(first, joint.pin);
+          } else connect(first, pin);
+        } else {
+          connect(first, pin);
+          connect(pin, second);
+          incomingPivotPins.set(second, joint.pin);
+        }
+      });
+
+      const rootNode = getNode(part);
+      const hingePin = mode === 'rotate' ? incomingPivotPins.get(rootNode) : null;
+      const traversal = mode === 'rotate' ? adjacency : connected;
+      const pending = [rootNode];
+      const visited = new Set();
+      const parentNodes = new Map();
+      while (pending.length) {
+        const current = pending.shift();
+        if (!current || visited.has(current)) continue;
+        visited.add(current);
+        for (const child of traversal.get(current) || []) {
+          if (visited.has(child)) continue;
+          parentNodes.set(child, current);
+          pending.push(child);
+        }
+      }
+      if (visited.size < 2 && !hingePin) return null;
+
+      scene.updateMatrixWorld(true);
+      const pivotPosition = hingePin
+        ? hingePin.getWorldPosition(new THREE.Vector3())
+        : part.getWorldPosition(new THREE.Vector3());
       const pivotGroup = new THREE.Group();
       pivotGroup.userData.isAssemblyGroup = true;
       pivotGroup.userData.isRotationPivotGroup = true;
-      pivotGroup.position.copy(pivotPin
-        ? pivotPin.getWorldPosition(new THREE.Vector3())
-        : part.getWorldPosition(new THREE.Vector3()));
+      pivotGroup.position.copy(pivotPosition);
       scene.add(pivotGroup);
-      pivotGroup.attach(part);
 
-      connectedPins
-        .filter(pin => pin !== pivotPin && parts.includes(pin))
-        .forEach(pin => pivotGroup.attach(pin));
-
+      rotationPivotParents = new Map([...visited].map(node => [node, node.parent]));
       rotationPivotGroup = pivotGroup;
       rotationPivotPart = part;
+      pivotGroup.attach(rootNode);
+      parentNodes.forEach((parent, child) => parent.attach(child));
       return pivotGroup;
     }
 
     function getTransformTargetForPart(part, mode = toolMode) {
-      const pivotGroup = mode === 'rotate' ? createRotationPivot(part) : null;
+      const pivotGroup = mode === 'rotate' || mode === 'translate' ? createRotationPivot(part, mode) : null;
       return pivotGroup || (part.parent?.userData.isAssemblyGroup ? part.parent : part);
     }
 
@@ -300,15 +374,37 @@ function getWorldSocketPosition(part, socket) {
 
     // Tách 1 linh kiện ra khỏi cụm
     function separatePartFromAssembly(part) {
-      const oldGroup = part.parent?.userData.isAssemblyGroup ? part.parent : null;
-      if (!oldGroup) return false;
+      if (rotationPivotGroup) restoreRotationPivot();
+      const linkedJoints = joints.filter(joint =>
+        joint.partA === part || joint.partB === part || joint.pin === part);
+      if (linkedJoints.length === 0) return false;
 
-      detachMagneticJoints(part); // Cắt đứt liên kết nam châm
-      scene.attach(part); // Đưa vật thể rơi ra ngoài scene gốc
+      const oldGroup = part.parent?.userData.isAssemblyGroup && !part.parent.userData.isRotationPivotGroup
+        ? part.parent
+        : null;
+      if (oldGroup) {
+        [...oldGroup.children].forEach(child => scene.attach(child));
+        oldGroup.parent?.remove(oldGroup);
+      } else {
+        scene.attach(part);
+      }
 
-      // Cấu trúc lại các linh kiện còn sót lại trong cụm cũ
-      rebuildAssemblyGroups(oldGroup.children.slice());
-      oldGroup.parent?.remove(oldGroup); // Xóa cụm cũ
+      joints = joints.filter(joint =>
+        joint.partA !== part && joint.partB !== part && joint.pin !== part);
+      if (part.userData) {
+        part.userData.magneticJointId = null;
+        part.userData.magneticSnapped = false;
+      }
+
+      reconcileRigidAssemblies();
+      updateJointsUI();
+      if (selectedPart === part) {
+        if (toolMode === 'select') transformControls.detach();
+        else {
+          transformControls.attach(getTransformTargetForPart(part, toolMode));
+          transformControls.setMode(toolMode === 'rotate' ? 'rotate' : 'translate');
+        }
+      }
       return true;
     }
 
@@ -361,7 +457,16 @@ function getWorldSocketPosition(part, socket) {
         detachMagneticSocket(pin, snap.pinSocket);
         detachMagneticSocket(snap.targetPart, snap.targetSocket);
         const jointId = 'magnetic_joint_' + Date.now();
-        joints.push({ id: jointId, partA: pin, partB: snap.targetPart, socketA: snap.pinSocket, socketB: snap.targetSocket, pin });
+        joints.push({
+          id: jointId,
+          partA: pin,
+          partB: snap.targetPart,
+          socketA: snap.pinSocket,
+          socketB: snap.targetSocket,
+          pin,
+          kinematicParent: snap.targetPart,
+          kinematicChild: pin
+        });
         
         // ĐÃ XÓA LỆNH KHÓA CỤM Ở ĐÂY ĐỂ TRÁNH GIẬT CHUỘT
         pin.userData.magneticJointId = jointId;
@@ -377,20 +482,30 @@ function getWorldSocketPosition(part, socket) {
         .applyQuaternion(desiredWorldQuaternion);
       const desiredWorldPosition = snap.pinPosition.clone().sub(rotatedHole);
 
-      // Gọi hàm hỗ trợ di chuyển
       movePartToDesiredWorld(part, desiredWorldPosition, desiredWorldQuaternion);
 
       const currentJoint = joints.find(j => j.id.startsWith('magnetic_joint_') &&
         j.partA === snap.pin && j.socketA === snap.pinSocket &&
         j.partB === part && j.socketB === snap.componentSocket);
-        
+
       if (!currentJoint || currentJoint.partA !== snap.pin || currentJoint.socketA !== snap.pinSocket) {
         detachMagneticSocket(part, snap.componentSocket);
         detachMagneticSocket(snap.pin, snap.pinSocket);
         const jointId = 'magnetic_joint_' + Date.now();
-        joints.push({ id: jointId, partA: snap.pin, partB: part, socketA: snap.pinSocket, socketB: snap.componentSocket, pin: snap.pin });
-        
-        // ĐÃ XÓA LỆNH KHÓA CỤM Ở ĐÂY ĐỂ TRÁNH GIẬT CHUỘT
+        const pinHasSupport = getPinParticipants(snap.pin).size > 0;
+        const kinematicParent = pinHasSupport ? snap.pin : part;
+        const kinematicChild = pinHasSupport ? part : snap.pin;
+        joints.push({
+          id: jointId,
+          partA: snap.pin,
+          partB: part,
+          socketA: snap.pinSocket,
+          socketB: snap.componentSocket,
+          pin: snap.pin,
+          kinematicParent,
+          kinematicChild
+        });
+
         part.userData.magneticJointId = jointId;
         part.userData.magneticSnapped = true;
         if (typeof updateJointsUI === 'function') updateJointsUI();
