@@ -1,4 +1,4 @@
-    // --- HỘP THÔNG BÁO TOAST UI ---
+// --- HỘP THÔNG BÁO TOAST UI ---
     function showToast(message, type = 'success') {
       const toast = document.getElementById('toast-notification');
       const msg = document.getElementById('toast-message');
@@ -37,10 +37,10 @@
       controls.dampingFactor = 0.05;
 
       transformControls = new THREE.TransformControls(camera, renderer.domElement);
-      transformControls.addEventListener('dragging-changed', (e) => { 
-        controls.enabled = !e.value; 
+      transformControls.addEventListener('dragging-changed', (e) => {
+        controls.enabled = !e.value;
         if (selectedPart) {
-          const transformTarget = selectedPart.parent?.userData.isAssemblyGroup ? selectedPart.parent : selectedPart;
+          const transformTarget = getTransformTargetForPart(selectedPart, toolMode);
           if (e.value) {
             transformTarget.userData.safeTransform = {
               position: transformTarget.position.clone(),
@@ -56,11 +56,13 @@
           }
         }
       });
-      transformControls.addEventListener('objectChange', () => { 
+      transformControls.addEventListener('objectChange', () => {
         if (selectedPart) {
-          const transformTarget = selectedPart.parent?.userData.isAssemblyGroup ? selectedPart.parent : selectedPart;
-          settleAssemblyOnGround(transformTarget);
-          snapPartPositionToGrid(transformTarget);
+          const transformTarget = getTransformTargetForPart(selectedPart, toolMode);
+          if (!transformTarget.userData.isRotationPivotGroup) {
+            settleAssemblyOnGround(transformTarget);
+            snapPartPositionToGrid(transformTarget);
+          }
           if (hasPartCollision(selectedPart)) {
             const safe = transformTarget.userData.safeTransform || { position: transformTarget.position.clone(), quaternion: transformTarget.quaternion.clone(), scale: transformTarget.scale.clone() };
             transformTarget.position.copy(safe.position);
@@ -74,9 +76,9 @@
             quaternion: transformTarget.quaternion.clone(),
             scale: transformTarget.scale.clone()
           };
-          clampPartToGround(transformTarget);
+          if (!transformTarget.userData.isRotationPivotGroup) clampPartToGround(transformTarget);
         }
-        recordHistoryState(); 
+        recordHistoryState();
       });
       scene.add(transformControls);
 

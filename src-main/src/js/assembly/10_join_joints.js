@@ -1,4 +1,4 @@
-    function getNonOverlapJoinOffset(partA, partB, h1, h2) {
+function getNonOverlapJoinOffset(partA, partB, h1, h2) {
       if (h1.dir !== h2.dir) return new THREE.Vector3();
 
       const axis = new THREE.Vector3(0, 0, 1).applyQuaternion(partA.quaternion);
@@ -56,19 +56,15 @@
       clampPartToGround(pickedSecondPart);
 
       const finalP1World = new THREE.Vector3(h1.x, h1.y, h1.z).applyMatrix4(pickedFirstPart.matrixWorld);
-      const pinCount = joints.filter(j => j.partA === pickedFirstPart || j.partB === pickedFirstPart || j.partA === pickedSecondPart || j.partB === pickedSecondPart).length;
-      let jointPin = null;
-      if (pinCount < 1) {
-        jointPin = spawnStandalonePin(0x38bdf8, { skipHistory: true, skipSelect: true });
-        jointPin.quaternion.copy(pickedFirstPart.quaternion);
-        jointPin.position.copy(finalP1World);
-        jointPin.userData.name = `Chốt ghép ${pickedFirstPart.userData.name} ↔ ${pickedSecondPart.userData.name}`;
-        jointPin.userData.isJoinPin = true;
-        jointPin.userData.joinedParts = [pickedFirstPart, pickedSecondPart];
-      }
+      const jointPin = spawnStandalonePin(0x38bdf8, { skipHistory: true, skipSelect: true });
+      jointPin.quaternion.copy(pickedFirstPart.quaternion);
+      jointPin.position.copy(finalP1World);
+      jointPin.userData.name = `Chốt ghép ${pickedFirstPart.userData.name} ↔ ${pickedSecondPart.userData.name}`;
+      jointPin.userData.isJoinPin = true;
+      jointPin.userData.joinedParts = [pickedFirstPart, pickedSecondPart];
 
       const jointId = 'joint_' + Date.now();
-      joints.push({ id: jointId, partA: pickedFirstPart, partB: pickedSecondPart, socketA: h1, socketB: h2, pin: jointPin || null });
+      joints.push({ id: jointId, partA: pickedFirstPart, partB: pickedSecondPart, socketA: h1, socketB: h2, pin: jointPin });
 
       settleAssemblyOnGround(pickedFirstPart);
       lockIntoAssembly(pickedFirstPart, pickedSecondPart);
@@ -108,6 +104,7 @@
 
     function removeJoint(jointId) {
       joints = joints.filter(j => j.id !== jointId);
+      reconcileRigidAssemblies();
       updateJointsUI();
       recordHistoryState();
       showToast("Đã tháo khớp ghép");

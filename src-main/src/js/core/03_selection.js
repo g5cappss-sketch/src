@@ -237,6 +237,7 @@
 
     // --- HỆ THỐNG SELECTION & QUẢN LÝ GIAO DIỆN LINH KIỆN ---
     function selectPart(part) {
+      if (rotationPivotGroup && rotationPivotPart !== part) restoreRotationPivot();
       selectedPart = part;
       const hud = document.getElementById('floating-part-hud');
       const noSelect = document.getElementById('inspector-no-selection');
@@ -260,7 +261,7 @@
         document.getElementById('inspect-sockets-count').innerText = (part.userData.holes || []).length;
 
         if (toolMode !== 'select') {
-          const transformTarget = part.parent?.userData.isAssemblyGroup ? part.parent : part;
+          const transformTarget = getTransformTargetForPart(part, toolMode);
           transformControls.attach(transformTarget);
           transformControls.setMode(toolMode === 'rotate' ? 'rotate' : 'translate');
         } else {

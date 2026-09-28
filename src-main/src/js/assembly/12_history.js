@@ -2,20 +2,24 @@
     function recordHistoryState() {
       const state = parts.map(p => {
         const assemblyGroup = p.parent?.userData.isAssemblyGroup ? p.parent : null;
+        const hasTemporaryPivot = assemblyGroup?.userData.isRotationPivotGroup;
+        const worldPosition = hasTemporaryPivot ? p.getWorldPosition(new THREE.Vector3()) : null;
+        const worldRotation = hasTemporaryPivot
+          ? new THREE.Euler().setFromQuaternion(p.getWorldQuaternion(new THREE.Quaternion()))
+          : null;
         return {
           id: p.userData.id,
           kind: inferPartKind(p),
           name: p.userData.name,
-          pos: p.position.clone(),
-          rot: p.rotation.clone(),
-          assemblyPos: assemblyGroup?.position.clone() || null,
-          assemblyRot: assemblyGroup?.rotation.clone() || null,
+          pos: worldPosition || p.position.clone(),
+          rot: worldRotation || p.rotation.clone(),
+          assemblyPos: hasTemporaryPivot ? null : assemblyGroup?.position.clone() || null,
+          assemblyRot: hasTemporaryPivot ? null : assemblyGroup?.rotation.clone() || null,
           color: p.userData.color,
           holesCount: (p.userData.holes || []).length
         };
       });
 
-      // Cắt bỏ nhánh tương lai nếu người dùng đang Undo mà lại thực hiện hành động mới
       history = history.slice(0, historyIndex + 1);
       history.push(state);
       historyIndex++;
@@ -48,6 +52,7 @@
 
     // 4. Khôi phục trạng thái từ lịch sử
     function restoreHistoryState(state) {
+      restoreRotationPivot();
       const snapshot = Array.isArray(state) ? state : [];
       const snapshotIds = new Set(snapshot.map(s => s.id));
 
@@ -82,6 +87,9 @@
       updatePartsCount();
       updateJoinWizardUI();
       updateJointsUI();
+      if (selectedPart && toolMode !== 'select') {
+        transformControls.attach(getTransformTargetForPart(selectedPart, toolMode));
+      }
     }
 
     // 5. Hàm cập nhật nút sáng/mờ (DUY NHẤT HÀM NÀY)

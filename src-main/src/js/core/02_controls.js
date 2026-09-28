@@ -49,18 +49,21 @@ function handleKeyboardRotation(event) {
 
     function rotateSelectedByKeyboard(axis, direction) {
       const part = selectedPart;
-      const isGrouped = part.parent?.userData.isAssemblyGroup;
-      const transformTarget = isGrouped ? part.parent : part;
+      const transformTarget = getTransformTargetForPart(part, 'rotate');
+      const isPivot = transformTarget.userData.isRotationPivotGroup;
+      const isGrouped = transformTarget.userData.isAssemblyGroup && !isPivot;
       const safe = {
         position: transformTarget.position.clone(),
         quaternion: transformTarget.quaternion.clone(),
         scale: transformTarget.scale.clone()
       };
 
-      if (!isGrouped) detachMagneticJoints(part);
+      if (!isGrouped && !isPivot) detachMagneticJoints(part);
       transformTarget.rotateOnWorldAxis(axis, direction * Math.PI / 2);
-      settleAssemblyOnGround(transformTarget);
-      snapPartPositionToGrid(transformTarget);
+      if (!isPivot) {
+        settleAssemblyOnGround(transformTarget);
+        snapPartPositionToGrid(transformTarget);
+      }
 
       if (hasPartCollision(part)) {
         transformTarget.position.copy(safe.position);
@@ -75,16 +78,12 @@ function handleKeyboardRotation(event) {
     }
 
     function getSelectedMagneticJoint() {
-      return joints.find(j => j.id.startsWith('magnetic_joint_') &&
-        j.pin && (j.partA === selectedPart || j.partB === selectedPart));
+      return joints.find(j => j.pin && getPinParticipants(j.pin).has(selectedPart) && getPinParticipants(j.pin).size > 1);
     }
 
     function isPartLockedByMultiplePins(part) {
-      const connectedPins = new Set(joints
-        .filter(j => j.id.startsWith('magnetic_joint_') && j.pin &&
-          (j.partA === part || j.partB === part))
-        .map(j => j.pin));
-      return connectedPins.size >= 2;
+      return getConnectedPins(part)
+        .filter(pin => getPinParticipants(pin).size > 1).length >= 2;
     }
 
     function rotateSelectedAroundJointAxis(direction, stepDegrees = 1) {
@@ -102,27 +101,33 @@ function handleKeyboardRotation(event) {
 
       const pin = joint.pin;
       pin.updateMatrixWorld(true);
-      const pivot = pin.getWorldPosition(new THREE.Vector3());
       const axis = new THREE.Vector3(0, 1, 0)
         .applyQuaternion(pin.getWorldQuaternion(new THREE.Quaternion()))
         .normalize();
-      const rotation = new THREE.Quaternion().setFromAxisAngle(axis, direction * stepDegrees * Math.PI / 180);
-      const worldPosition = part.getWorldPosition(new THREE.Vector3());
-      const worldQuaternion = part.getWorldQuaternion(new THREE.Quaternion());
-      const desiredWorldPosition = worldPosition.sub(pivot).applyQuaternion(rotation).add(pivot);
-      const desiredWorldQuaternion = rotation.multiply(worldQuaternion);
+      const angle = direction * stepDegrees * Math.PI / 180;
+      const rotation = new THREE.Quaternion().setFromAxisAngle(axis, angle);
+      const pivotGroup = createRotationPivot(part);
 
-      if (part.parent) {
-        part.parent.updateMatrixWorld(true);
-        part.position.copy(part.parent.worldToLocal(desiredWorldPosition));
-        const parentQuaternion = part.parent.getWorldQuaternion(new THREE.Quaternion());
-        part.quaternion.copy(parentQuaternion.invert().multiply(desiredWorldQuaternion));
+      if (pivotGroup) {
+        pivotGroup.rotateOnWorldAxis(axis, angle);
+        pivotGroup.updateMatrixWorld(true);
       } else {
-        part.position.copy(desiredWorldPosition);
-        part.quaternion.copy(desiredWorldQuaternion);
+        const pivot = pin.getWorldPosition(new THREE.Vector3());
+        const worldPosition = part.getWorldPosition(new THREE.Vector3());
+        const worldQuaternion = part.getWorldQuaternion(new THREE.Quaternion());
+        const desiredWorldPosition = worldPosition.sub(pivot).applyQuaternion(rotation).add(pivot);
+        const desiredWorldQuaternion = rotation.multiply(worldQuaternion);
+        if (part.parent) {
+          part.parent.updateMatrixWorld(true);
+          part.position.copy(part.parent.worldToLocal(desiredWorldPosition));
+          const parentQuaternion = part.parent.getWorldQuaternion(new THREE.Quaternion());
+          part.quaternion.copy(parentQuaternion.invert().multiply(desiredWorldQuaternion));
+        } else {
+          part.position.copy(desiredWorldPosition);
+          part.quaternion.copy(desiredWorldQuaternion);
+        }
+        part.updateMatrixWorld(true);
       }
-
-      part.updateMatrixWorld(true);
       recordHistoryState();
     }
 
@@ -353,18 +358,16 @@ function handleKeyboardRotation(event) {
       });
 
       if (!selectedPart) {
+        restoreRotationPivot();
         transformControls.detach();
         return;
       }
 
       if (mode === 'select') {
+        restoreRotationPivot();
         transformControls.detach();
       } else {
-        // TRỌNG TÂM FIX: Nếu linh kiện đang nằm trong cụm, TransformControls sẽ bám vào cụm tổng (parent)
-        const targetToMove = (selectedPart.parent && selectedPart.parent.userData.isAssemblyGroup) 
-          ? selectedPart.parent 
-          : selectedPart;
-
+        const targetToMove = getTransformTargetForPart(selectedPart, mode);
         transformControls.attach(targetToMove);
         transformControls.setMode(mode === 'rotate' ? 'rotate' : 'translate');
       }
@@ -464,19 +467,16 @@ function handleKeyboardRotation(event) {
 
     // LẮNG NGHE PHÍM TẮT
     window.addEventListener('keydown', (event) => {
-      // Bỏ qua nếu đang gõ text vào ô input
       if (['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName)) return;
 
-      // --- PHÍM ESC: THÁO RỜI VẬT THỂ ---
-      if (event.key === 'Escape' && typeof selectedPart !== 'undefined' && selectedPart) {
+      if (event.key === 'Escape' && selectedPart) {
         const success = separatePartFromAssembly(selectedPart);
         if (success && typeof showToast === 'function') {
           showToast(`Đã bứt ${selectedPart.userData.name || 'linh kiện'} ra khỏi cụm`);
         }
       }
 
-      // --- PHÍM DELETE / BACKSPACE: XÓA VẬT THỂ ---
-      if ((event.key === 'Delete' || event.key === 'Backspace') && typeof selectedPart !== 'undefined' && selectedPart) {
+      if ((event.key === 'Delete' || event.key === 'Backspace') && selectedPart) {
         deleteSelectedPart();
       }
     });

@@ -1,4 +1,4 @@
-    function getWorldSocketPosition(part, socket) {
+function getWorldSocketPosition(part, socket) {
       part.updateMatrixWorld(true);
       return new THREE.Vector3(socket.x, socket.y, socket.z).applyMatrix4(part.matrixWorld);
     }
@@ -173,27 +173,129 @@
     // HỆ THỐNG QUẢN LÝ CỤM LẮP RÁP (ASSEMBLY)
     // ==========================================
 
-    // Gộp các linh kiện đã nối vào cùng một cụm, giữ nguyên tọa độ thế giới.
-    function lockIntoAssembly(partA, partB) {
-      const groupA = partA.parent?.userData.isAssemblyGroup ? partA.parent : null;
-      const groupB = partB.parent?.userData.isAssemblyGroup ? partB.parent : null;
-      let assemblyGroup = groupA || groupB;
+    let rotationPivotGroup = null;
+    let rotationPivotPart = null;
 
-      if (!assemblyGroup) {
-        assemblyGroup = new THREE.Group();
-        assemblyGroup.userData.isAssemblyGroup = true;
-        scene.add(assemblyGroup);
-      }
+    function getConnectedPins(part) {
+      return [...new Set(joints.map(joint => joint.pin)
+        .filter(pin => pin?.userData?.isPin && getPinParticipants(pin).has(part)))];
+    }
 
-      // Nếu 2 linh kiện thuộc 2 cụm khác nhau, gộp chung lại thành 1 cụm lớn
-      [groupA, groupB].forEach(group => {
-        if (!group || group === assemblyGroup) return;
-        [...group.children].forEach(child => assemblyGroup.attach(child));
+    function getPinParticipants(pin) {
+      const participants = new Set();
+      joints.forEach(joint => {
+        if (joint.pin !== pin) return;
+        [joint.partA, joint.partB].forEach(part => {
+          if (part && part !== pin && !part.userData?.isPin) participants.add(part);
+        });
+      });
+      return participants;
+    }
+
+    function restoreRotationPivot() {
+      if (!rotationPivotGroup) return;
+
+      rotationPivotGroup.children.slice().forEach(member => scene.attach(member));
+      rotationPivotGroup.parent?.remove(rotationPivotGroup);
+      rotationPivotGroup = null;
+      rotationPivotPart = null;
+    }
+
+    function createRotationPivot(part) {
+      if (rotationPivotGroup && rotationPivotPart === part) return rotationPivotGroup;
+      restoreRotationPivot();
+
+      const connectedPins = getConnectedPins(part);
+      const sharedPins = connectedPins.filter(pin => getPinParticipants(pin).size > 1);
+      if (sharedPins.length > 1 || (sharedPins.length === 0 && connectedPins.length === 0)) return null;
+
+      const pivotPin = sharedPins[0] || null;
+      const pivotGroup = new THREE.Group();
+      pivotGroup.userData.isAssemblyGroup = true;
+      pivotGroup.userData.isRotationPivotGroup = true;
+      pivotGroup.position.copy(pivotPin
+        ? pivotPin.getWorldPosition(new THREE.Vector3())
+        : part.getWorldPosition(new THREE.Vector3()));
+      scene.add(pivotGroup);
+      pivotGroup.attach(part);
+
+      connectedPins
+        .filter(pin => pin !== pivotPin && parts.includes(pin))
+        .forEach(pin => pivotGroup.attach(pin));
+
+      rotationPivotGroup = pivotGroup;
+      rotationPivotPart = part;
+      return pivotGroup;
+    }
+
+    function getTransformTargetForPart(part, mode = toolMode) {
+      const pivotGroup = mode === 'rotate' ? createRotationPivot(part) : null;
+      return pivotGroup || (part.parent?.userData.isAssemblyGroup ? part.parent : part);
+    }
+
+    function lockIntoAssembly() {
+      reconcileRigidAssemblies();
+    }
+
+    function reconcileRigidAssemblies() {
+      restoreRotationPivot();
+      const structuralParts = parts.filter(part => !part.userData?.isPin);
+      const pinsByPair = new Map();
+
+      [...new Set(joints.map(joint => joint.pin).filter(pin => pin?.userData?.isPin))]
+        .forEach(pin => {
+          const participants = [...getPinParticipants(pin)].filter(part => structuralParts.includes(part));
+          for (let firstIndex = 0; firstIndex < participants.length; firstIndex++) {
+            for (let secondIndex = firstIndex + 1; secondIndex < participants.length; secondIndex++) {
+              const first = participants[firstIndex];
+              const second = participants[secondIndex];
+              const key = [first.userData.id, second.userData.id].sort().join('|');
+              if (!pinsByPair.has(key)) pinsByPair.set(key, { parts: [first, second], pins: new Set() });
+              pinsByPair.get(key).pins.add(pin);
+            }
+          }
+        });
+
+      const connections = new Map(structuralParts.map(part => [part, new Set()]));
+      pinsByPair.forEach(({ parts: pairParts, pins }) => {
+        if (pins.size < 2) return;
+        connections.get(pairParts[0]).add(pairParts[1]);
+        connections.get(pairParts[1]).add(pairParts[0]);
+      });
+
+      const oldGroups = new Set(parts
+        .map(part => part.parent)
+        .filter(parent => parent?.userData.isAssemblyGroup && !parent.userData.isRotationPivotGroup));
+      oldGroups.forEach(group => {
+        [...group.children].forEach(child => scene.attach(child));
         group.parent?.remove(group);
       });
 
-      if (partA.parent !== assemblyGroup) assemblyGroup.attach(partA);
-      if (partB.parent !== assemblyGroup) assemblyGroup.attach(partB);
+      const remaining = new Set(structuralParts);
+      while (remaining.size) {
+        const component = new Set();
+        const pending = [remaining.values().next().value];
+        while (pending.length) {
+          const current = pending.pop();
+          if (!remaining.delete(current)) continue;
+          component.add(current);
+          connections.get(current).forEach(neighbor => pending.push(neighbor));
+        }
+        if (component.size < 2) continue;
+
+        const members = [...component];
+        const componentPins = [...new Set(joints.map(joint => joint.pin).filter(pin => pin?.userData?.isPin))]
+          .filter(pin => {
+            const participants = getPinParticipants(pin);
+            return participants.size > 0 && [...participants].every(part => component.has(part));
+          });
+        members.push(...componentPins);
+
+        const assemblyGroup = new THREE.Group();
+        assemblyGroup.userData.isAssemblyGroup = true;
+        scene.add(assemblyGroup);
+        members.forEach(member => assemblyGroup.attach(member));
+      }
     }
 
     // Tách 1 linh kiện ra khỏi cụm
@@ -212,35 +314,8 @@
 
     // Đảm bảo khi rút 1 chốt ở giữa, nếu cụm bị gãy làm đôi thì sẽ tự tách thành 2 cụm độc lập
     function rebuildAssemblyGroups(groupParts) {
-      const remainingParts = new Set(groupParts);
-      const connections = new Map(groupParts.map(part => [part, new Set()]));
-
-      joints.forEach(joint => {
-        if (!joint.id.startsWith('magnetic_joint_') ||
-          !remainingParts.has(joint.partA) || !remainingParts.has(joint.partB)) return;
-        connections.get(joint.partA).add(joint.partB);
-        connections.get(joint.partB).add(joint.partA);
-      });
-
-      while (remainingParts.size > 0) {
-        const component = [];
-        const pending = [remainingParts.values().next().value];
-        while (pending.length > 0) {
-          const current = pending.pop();
-          if (!remainingParts.delete(current)) continue;
-          component.push(current);
-          connections.get(current).forEach(neighbor => pending.push(neighbor));
-        }
-
-        if (component.length > 1) {
-          const assemblyGroup = new THREE.Group();
-          assemblyGroup.userData.isAssemblyGroup = true;
-          scene.add(assemblyGroup);
-          component.forEach(member => assemblyGroup.attach(member));
-        } else if (component.length === 1) {
-          scene.attach(component[0]); // Nếu chỉ còn 1 mảnh, cho rơi ra ngoài luôn
-        }
-      }
+      groupParts.forEach(member => scene.attach(member));
+      reconcileRigidAssemblies();
     }
 
     // HÀM HỖ TRỢ ĐỈNH CAO: Tự động tính toán để di chuyển cả Cụm hoặc Linh kiện đơn lẻ cực kỳ chuẩn xác
