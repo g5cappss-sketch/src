@@ -24,6 +24,7 @@
       function startDirectDrag(part, event) {
         if (typeof toolMode !== 'undefined' && toolMode !== 'select') return false;
         if (part !== selectedPart || (typeof pickJoinMode !== 'undefined' && pickJoinMode)) return false;
+        if (hasKinematicParent(part)) return false;
 
         updatePointer(event);
         raycaster.setFromCamera(mouse, camera);
@@ -135,6 +136,16 @@
         controls.enabled = true;
         canvas.releasePointerCapture(event.pointerId);
         canvas.style.cursor = '';
+
+        if (wasKinematicDrag && !hasKinematicParent(selectedPart) && !selectedPart.userData.isPin) {
+          const descendantPins = new Set([...rotationPivotParents.keys()]
+            .filter(member => member.userData?.isPin));
+          const snap = findNearestComponentSnap(selectedPart, 2.25, descendantPins);
+          if (snap) {
+            snapComponentToPin(selectedPart, snap);
+            reconcileRigidAssemblies();
+          }
+        }
 
         if (!wasKinematicDrag && !selectedPart.userData.magneticSnapped) {
           if (selectedPart.userData.isPin) {

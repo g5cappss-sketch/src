@@ -98,14 +98,14 @@ function getWorldSocketPosition(part, socket) {
       return nearest;
     }
 
-    function findNearestComponentSnap(part, maxDistance = 1.0) {
+    function findNearestComponentSnap(part, maxDistance = 1.0, excludedPins = null) {
       const componentSockets = part.userData.holes || [];
       let nearest = null;
 
       for (const componentSocket of componentSockets) {
         const holePosition = getWorldSocketPosition(part, componentSocket);
         for (const pin of parts) {
-          if (!pin.userData?.isPin || pin === part) continue;
+          if (!pin.userData?.isPin || pin === part || excludedPins?.has(pin)) continue;
           if (!canMagneticallyReattach(part, pin)) continue;
 
           for (const pinSocket of pin.userData.holes || []) {
@@ -268,7 +268,7 @@ function getWorldSocketPosition(part, socket) {
 
       const rootNode = getNode(part);
       const hingePin = mode === 'rotate' ? incomingPivotPins.get(rootNode) : null;
-      const traversal = mode === 'rotate' ? adjacency : connected;
+      const traversal = adjacency;
       const pending = [rootNode];
       const visited = new Set();
       const parentNodes = new Map();
@@ -375,28 +375,39 @@ function getWorldSocketPosition(part, socket) {
     // Tách 1 linh kiện ra khỏi cụm
     function separatePartFromAssembly(part) {
       if (rotationPivotGroup) restoreRotationPivot();
-      const linkedJoints = joints.filter(joint =>
-        joint.partA === part || joint.partB === part || joint.pin === part);
-      if (linkedJoints.length === 0) return false;
 
+      const { edges, descendants } = getKinematicBranch(part);
+      const detachedJoints = new Set(edges
+        .filter(edge => edge.child === part && !descendants.has(edge.parent))
+        .map(edge => edge.joint));
       const oldGroup = part.parent?.userData.isAssemblyGroup && !part.parent.userData.isRotationPivotGroup
         ? part.parent
         : null;
-      if (oldGroup) {
-        [...oldGroup.children].forEach(child => scene.attach(child));
-        oldGroup.parent?.remove(oldGroup);
-      } else {
-        scene.attach(part);
-      }
+      if (!detachedJoints.size && !oldGroup) return false;
 
-      joints = joints.filter(joint =>
-        joint.partA !== part && joint.partB !== part && joint.pin !== part);
-      if (part.userData) {
-        part.userData.magneticJointId = null;
-        part.userData.magneticSnapped = false;
+      const affectedParts = new Set([part]);
+      detachedJoints.forEach(joint => {
+        [joint.partA, joint.partB, joint.pin, joint.kinematicParent, joint.kinematicChild]
+          .filter(Boolean)
+          .forEach(member => affectedParts.add(member));
+      });
+
+      if (oldGroup) {
+        oldGroup.children.slice().forEach(member => scene.attach(member));
+        oldGroup.parent?.remove(oldGroup);
       }
+      scene.attach(part);
+      part.updateMatrixWorld(true);
+
+      joints = joints.filter(joint => !detachedJoints.has(joint));
+      syncMagneticStateForParts(affectedParts);
+      part.userData.magneticReleaseParts = [];
+      part.userData.magneticReleaseOrigin = null;
+      delete part.userData.kinematicParent;
+      delete part.userData.kinematicChild;
 
       reconcileRigidAssemblies();
+      part.updateMatrixWorld(true);
       updateJointsUI();
       if (selectedPart === part) {
         if (toolMode === 'select') transformControls.detach();
@@ -510,4 +521,79 @@ function getWorldSocketPosition(part, socket) {
         part.userData.magneticSnapped = true;
         if (typeof updateJointsUI === 'function') updateJointsUI();
       }
+    }
+
+    function syncMagneticStateForParts(affectedParts) {
+      affectedParts.forEach(affectedPart => {
+        if (!affectedPart?.userData) return;
+        const activeJoints = joints.filter(joint =>
+          joint.id.startsWith('magnetic_joint_') &&
+          (joint.partA === affectedPart || joint.partB === affectedPart || joint.pin === affectedPart));
+        affectedPart.userData.magneticSnapped = activeJoints.length > 0;
+
+        if (affectedPart.userData.isPin) {
+          const mountJoint = activeJoints.find(joint => joint.pin === affectedPart && joint.partA === affectedPart);
+          affectedPart.userData.magneticJointId = mountJoint?.id || null;
+        } else {
+          affectedPart.userData.magneticJointId = activeJoints[0]?.id || null;
+        }
+      });
+    }
+
+    function getKinematicEdges() {
+      const edges = [];
+      const addEdge = (parent, child, joint) => {
+        if (parent && child && parent !== child) edges.push({ parent, child, joint });
+      };
+
+      joints.forEach(joint => {
+        const { partA, partB, pin } = joint;
+        if (joint.kinematicParent && joint.kinematicChild) {
+          if (pin && pin !== joint.kinematicParent && pin !== joint.kinematicChild) {
+            addEdge(joint.kinematicParent, pin, joint);
+            addEdge(pin, joint.kinematicChild, joint);
+          } else {
+            addEdge(joint.kinematicParent, joint.kinematicChild, joint);
+          }
+        } else if (!pin) {
+          addEdge(partA, partB, joint);
+        } else if (pin === partA) {
+          if (pin.userData?.magneticJointId && pin.userData.magneticJointId !== joint.id) {
+            addEdge(pin, partB, joint);
+          } else {
+            addEdge(partB, pin, joint);
+          }
+        } else if (pin === partB) {
+          if (pin.userData?.magneticJointId && pin.userData.magneticJointId !== joint.id) {
+            addEdge(pin, partA, joint);
+          } else {
+            addEdge(partA, pin, joint);
+          }
+        } else {
+          addEdge(partA, pin, joint);
+          addEdge(pin, partB, joint);
+        }
+      });
+
+      return edges;
+    }
+
+    function getKinematicBranch(root) {
+      const edges = getKinematicEdges();
+      const descendants = new Set([root]);
+      const pending = [root];
+      while (pending.length) {
+        const parent = pending.pop();
+        edges.forEach(edge => {
+          if (edge.parent === parent && !descendants.has(edge.child)) {
+            descendants.add(edge.child);
+            pending.push(edge.child);
+          }
+        });
+      }
+      return { edges, descendants };
+    }
+
+    function hasKinematicParent(part) {
+      return getKinematicEdges().some(edge => edge.child === part);
     }
