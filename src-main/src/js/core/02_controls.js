@@ -3,6 +3,31 @@ function handleKeyboardRotation(event) {
       if (['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName)) return;
 
       const key = event.key.toLowerCase();
+      if (event.shiftKey && key === 't') {
+        event.preventDefault();
+        if (!getSelectedMagneticJoint()) {
+          showToast('Chọn thanh đã ghép với chốt trước', 'error');
+          return;
+        }
+        if (!isManualJointRotationMode && isPartLockedByMultiplePins(selectedPart)) {
+          showToast('Thanh đã bị khóa bằng hai chốt, không thể xoay riêng', 'error');
+          return;
+        }
+
+        isManualJointRotationMode = !isManualJointRotationMode;
+        if (isManualJointRotationMode) setToolMode('select');
+        showToast(isManualJointRotationMode
+          ? 'Đã bật xoay bằng chuột: kéo ngang, mỗi nấc 5°'
+          : 'Đã tắt xoay bằng chuột');
+        return;
+      }
+
+      if (key === 'r') {
+        event.preventDefault();
+        rotateSelectedAroundJointAxis(event.shiftKey ? -1 : 1);
+        return;
+      }
+
       const rotations = {
         w: { axis: new THREE.Vector3(1, 0, 0), direction: 1 },
         s: { axis: new THREE.Vector3(1, 0, 0), direction: -1 },
@@ -46,6 +71,58 @@ function handleKeyboardRotation(event) {
       }
 
       transformTarget.userData.safeTransform = safe;
+      recordHistoryState();
+    }
+
+    function getSelectedMagneticJoint() {
+      return joints.find(j => j.id.startsWith('magnetic_joint_') &&
+        j.pin && (j.partA === selectedPart || j.partB === selectedPart));
+    }
+
+    function isPartLockedByMultiplePins(part) {
+      const connectedPins = new Set(joints
+        .filter(j => j.id.startsWith('magnetic_joint_') && j.pin &&
+          (j.partA === part || j.partB === part))
+        .map(j => j.pin));
+      return connectedPins.size >= 2;
+    }
+
+    function rotateSelectedAroundJointAxis(direction, stepDegrees = 1) {
+      const part = selectedPart;
+      if (isPartLockedByMultiplePins(part)) {
+        showToast('Thanh đã bị khóa bằng hai chốt, không thể xoay riêng', 'error');
+        return;
+      }
+
+      const joint = getSelectedMagneticJoint();
+      if (!joint) {
+        showToast('Chi tiết chưa được ghép bằng chốt', 'error');
+        return;
+      }
+
+      const pin = joint.pin;
+      pin.updateMatrixWorld(true);
+      const pivot = pin.getWorldPosition(new THREE.Vector3());
+      const axis = new THREE.Vector3(0, 1, 0)
+        .applyQuaternion(pin.getWorldQuaternion(new THREE.Quaternion()))
+        .normalize();
+      const rotation = new THREE.Quaternion().setFromAxisAngle(axis, direction * stepDegrees * Math.PI / 180);
+      const worldPosition = part.getWorldPosition(new THREE.Vector3());
+      const worldQuaternion = part.getWorldQuaternion(new THREE.Quaternion());
+      const desiredWorldPosition = worldPosition.sub(pivot).applyQuaternion(rotation).add(pivot);
+      const desiredWorldQuaternion = rotation.multiply(worldQuaternion);
+
+      if (part.parent) {
+        part.parent.updateMatrixWorld(true);
+        part.position.copy(part.parent.worldToLocal(desiredWorldPosition));
+        const parentQuaternion = part.parent.getWorldQuaternion(new THREE.Quaternion());
+        part.quaternion.copy(parentQuaternion.invert().multiply(desiredWorldQuaternion));
+      } else {
+        part.position.copy(desiredWorldPosition);
+        part.quaternion.copy(desiredWorldQuaternion);
+      }
+
+      part.updateMatrixWorld(true);
       recordHistoryState();
     }
 

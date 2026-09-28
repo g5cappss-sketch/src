@@ -7,6 +7,9 @@
       const dragPoint = new THREE.Vector3();
       const dragOffset = new THREE.Vector3();
       let isDirectDragging = false;
+      let isJointRotationDragging = false;
+      let jointRotationLastX = 0;
+      let jointRotationRemainder = 0;
       let dragStartPosition = null;
       let collisionWasBlocked = false;
 
@@ -47,8 +50,31 @@
         return true;
       }
 
+      function startJointRotationDrag(event) {
+        isJointRotationDragging = true;
+        jointRotationLastX = event.clientX;
+        jointRotationRemainder = 0;
+        controls.enabled = false;
+        canvas.setPointerCapture(event.pointerId);
+        canvas.style.cursor = 'ew-resize';
+        event.preventDefault();
+      }
+
       canvas.addEventListener('pointermove', (event) => {
         if (typeof isExploded !== 'undefined' && isExploded) return;
+        if (isJointRotationDragging && selectedPart) {
+          jointRotationRemainder += event.clientX - jointRotationLastX;
+          jointRotationLastX = event.clientX;
+          const steps = Math.trunc(jointRotationRemainder / 8);
+          if (steps) {
+            const direction = Math.sign(steps);
+            for (let step = 0; step < Math.abs(steps); step++) {
+              rotateSelectedAroundJointAxis(direction, 5);
+            }
+            jointRotationRemainder -= steps * 8;
+          }
+          return;
+        }
         if (!isDirectDragging || !selectedPart) return;
 
         updatePointer(event);
@@ -100,6 +126,13 @@
       });
 
       canvas.addEventListener('pointerup', (event) => {
+        if (isJointRotationDragging) {
+          isJointRotationDragging = false;
+          controls.enabled = true;
+          if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
+          canvas.style.cursor = '';
+          return;
+        }
         if (!isDirectDragging || !selectedPart) return;
 
         isDirectDragging = false;
@@ -164,6 +197,16 @@
           }
 
           if (targetPart) {
+            if (isManualJointRotationMode && targetPart === selectedPart) {
+              if (isPartLockedByMultiplePins(targetPart)) {
+                isManualJointRotationMode = false;
+                showToast('Thanh đã bị khóa bằng hai chốt, không thể xoay riêng', 'error');
+                return;
+              }
+              startJointRotationDrag(e);
+              return;
+            }
+
             if (pickJoinMode === 'first') {
               pickedFirstPart = targetPart;
               updateJoinWizardUI();

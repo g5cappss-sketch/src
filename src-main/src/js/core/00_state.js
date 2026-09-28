@@ -22,4 +22,5 @@
     let pickJoinMode = null;
     let badgesMode = 'selected'; // 'selected' | 'all' | 'none'
     let angleSnapEnabled = true;
+    let isManualJointRotationMode = false;
 
