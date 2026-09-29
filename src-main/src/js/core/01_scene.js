@@ -16,6 +16,12 @@
       scene = new THREE.Scene();
       scene.background = new THREE.Color(0x05070c);
 
+      selectedPartHitbox = new THREE.Box3Helper(new THREE.Box3(), 0x22d3ee);
+      selectedPartHitbox.material.depthTest = false;
+      selectedPartHitbox.renderOrder = 10;
+      selectedPartHitbox.visible = false;
+      scene.add(selectedPartHitbox);
+
       camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 1000);
       camera.position.set(10, 12, 16);
 
@@ -41,6 +47,11 @@
         controls.enabled = !e.value;
         if (selectedPart) {
           const transformTarget = getTransformTargetForPart(selectedPart, toolMode);
+          if (!transformTarget) {
+            transformControls.detach();
+            controls.enabled = true;
+            return;
+          }
           if (e.value) {
             transformTarget.userData.safeTransform = {
               position: transformTarget.position.clone(),
@@ -59,6 +70,21 @@
       transformControls.addEventListener('objectChange', () => {
         if (selectedPart) {
           const transformTarget = getTransformTargetForPart(selectedPart, toolMode);
+          if (!transformTarget) {
+            transformControls.detach();
+            showToast('Cụm đã bị khóa cứng tĩnh học, không thể xoay', 'error');
+            return;
+          }
+          if (toolMode === 'rotate' && !canRotateWholeRigidCluster(selectedPart, transformTarget)) {
+            const safe = transformTarget.userData.safeTransform;
+            if (safe) {
+              transformTarget.position.copy(safe.position);
+              transformTarget.quaternion.copy(safe.quaternion);
+              transformTarget.scale.copy(safe.scale);
+            }
+            showToast('Không thể xoay riêng một phần của cụm cứng', 'error');
+            return;
+          }
           if (!transformTarget.userData.isRotationPivotGroup) {
             settleAssemblyOnGround(transformTarget);
             snapPartPositionToGrid(transformTarget);

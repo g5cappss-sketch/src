@@ -1,5 +1,5 @@
     function setSidebarTab(tabName) {
-      const tabs = ['library', 'joinwizard', 'inspector', 'joints'];
+      const tabs = ['library', 'inspector', 'joints'];
       tabs.forEach(t => {
         const btn = document.getElementById('nav-btn-' + t);
         const pane = document.getElementById('tab-pane-' + t);

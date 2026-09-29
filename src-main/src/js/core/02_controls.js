@@ -149,7 +149,7 @@ function handleKeyboardRotation(event) {
       }
 
       function startDirectDrag(part, event) {
-        if (toolMode !== 'select' || part !== selectedPart || pickJoinMode) return false;
+        if (toolMode !== 'select' || part !== selectedPart) return false;
 
         updatePointer(event);
         raycaster.setFromCamera(mouse, camera);
@@ -304,32 +304,18 @@ function handleKeyboardRotation(event) {
           }
 
           if (targetPart) {
-            if (pickJoinMode === 'first') {
-              pickedFirstPart = targetPart;
-              updateJoinWizardUI();
-              cancelSnapMode();
-              showToast(`Đã chọn Đối tượng 1: ${targetPart.userData.name}`);
-            } else if (pickJoinMode === 'second') {
-              pickedSecondPart = targetPart;
-              updateJoinWizardUI();
-              cancelSnapMode();
-              showToast(`Đã chọn Đối tượng 2: ${targetPart.userData.name}`);
-            } else {
-              const wasAlreadySelected = targetPart === selectedPart;
-              selectPart(targetPart);
-              if (foundSocket) {
-                showToast(`Đã chọn Lỗ #${foundSocket.index} trên ${targetPart.userData.name}`);
-              }
-              if (wasAlreadySelected) startDirectDrag(targetPart, e);
+            const wasAlreadySelected = targetPart === selectedPart;
+            selectPart(targetPart);
+            if (foundSocket) {
+              showToast(`Đã chọn Lỗ #${foundSocket.index} trên ${targetPart.userData.name}`);
             }
+            if (wasAlreadySelected) startDirectDrag(targetPart, e);
             return;
           }
         }
 
         // Nếu click ra khoảng trống không trúng chi tiết nào và đang ở chế độ 'select'
-        if (!pickJoinMode && toolMode === 'select') {
-          selectPart(null);
-        }
+        if (toolMode === 'select') selectPart(null);
       });
     }
 

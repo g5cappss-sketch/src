@@ -102,25 +102,38 @@
       });
     }
 
-    function toggleBadgesMode() {
-      if (badgesMode === 'selected') {
-        badgesMode = 'all';
-        document.getElementById('label-badges-mode').textContent = 'Số: Hiện hết';
-        showToast('Chế độ nhãn số: Hiển thị tất cả');
-      } else if (badgesMode === 'all') {
-        badgesMode = 'none';
-        document.getElementById('label-badges-mode').textContent = 'Số: Tắt';
-        showToast('Chế độ nhãn số: Tắt toàn bộ');
-      } else {
-        badgesMode = 'selected';
-        document.getElementById('label-badges-mode').textContent = 'Số: Khi chọn';
-        showToast('Chế độ nhãn số: Hiện to & nhấp nháy khi chọn');
-      }
+    function setBadgesMode(mode) {
+      if (!['selected', 'all', 'none'].includes(mode)) return;
+      badgesMode = mode;
+      document.querySelectorAll('[data-badges-mode]').forEach(button => {
+        const isActive = button.dataset.badgesMode === mode;
+        button.setAttribute('aria-pressed', String(isActive));
+        button.classList.toggle('is-selected', isActive);
+        button.classList.toggle('bg-slate-800', isActive);
+        button.classList.toggle('text-slate-200', isActive);
+        button.classList.toggle('text-slate-300', !isActive);
+        button.querySelector('.mode-check')?.classList.toggle('hidden', !isActive);
+      });
       updateBadgesVisibility();
+    }
+
+    function setHitboxVisibility(visible) {
+      isHitboxVisible = Boolean(visible);
+      if (selectedPartHitbox) selectedPartHitbox.visible = isHitboxVisible && Boolean(selectedPart) && !isExploded;
     }
 
     function animate() {
       requestAnimationFrame(animate);
+
+      if (selectedPartHitbox) {
+        if (selectedPart && !isExploded) {
+          selectedPart.updateMatrixWorld(true);
+          selectedPartHitbox.box.copy(getPartVisualBounds(selectedPart));
+          selectedPartHitbox.visible = isHitboxVisible && !selectedPartHitbox.box.isEmpty();
+        } else {
+          selectedPartHitbox.visible = false;
+        }
+      }
 
       // Hiệu ứng nhấp nháy / thở (Pulsing) cho chi tiết đang chọn
       if (selectedPart) {

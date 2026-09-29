@@ -1,9 +1,13 @@
 const STORAGE_KEY = 'zmrobo_system_models_v1';
 
+    function getLibraryPartKind(category) {
+      return { beams: 'beam', pins: 'pin', motors: 'motor', custom: 'custom' }[category] || 'custom';
+    }
+
     // ==============================================================
     // 1. HỆ THỐNG LƯU TRỮ VÀ KHÔI PHỤC MODEL VĨNH VIỄN (LOCALSTORAGE)
     // ==============================================================
-    function saveModelToSystem(partId, cleanName, holesCount, thumbnailData, glbBuffer) {
+    function saveModelToSystem(partId, cleanName, holesCount, thumbnailData, glbBuffer, category) {
       const blob = new Blob([glbBuffer]);
       const reader = new FileReader();
       
@@ -12,6 +16,7 @@ const STORAGE_KEY = 'zmrobo_system_models_v1';
         const newItem = {
           id: partId,
           name: cleanName,
+          category,
           holesCount: holesCount,
           thumbnail: thumbnailData,
           glbData: base64Glb,
@@ -58,10 +63,12 @@ const STORAGE_KEY = 'zmrobo_system_models_v1';
             
             // Gọi lại hàm import với cờ isRestoring = true để hiển thị lên thẻ UI
             if (typeof parseGLBBuffer === 'function') {
-              parseGLBBuffer(bytes.buffer, savedItem.name + '.glb', { 
+              parseGLBBuffer(bytes.buffer, savedItem.name + '.glb', {
                 isRestoring: true, 
                 originalId: savedItem.id, 
-                thumbnail: savedItem.thumbnail 
+                name: savedItem.name,
+                category: savedItem.category || 'custom',
+                sourceGLBData: savedItem.glbData
               });
             }
           }
@@ -103,13 +110,101 @@ const STORAGE_KEY = 'zmrobo_system_models_v1';
       if (modelInput) {
         modelInput.addEventListener('change', (e) => {
           if (e.target.files && e.target.files[0]) handleGLBFileInput(e.target.files[0]);
+          e.target.value = '';
         });
       }
       if (projectInput) {
         projectInput.addEventListener('change', (e) => {
           if (e.target.files && e.target.files[0]) loadProjectFile(e.target.files[0]);
+          e.target.value = '';
         });
       }
+
+      const importModal = document.getElementById('glb-import-modal');
+      importModal?.addEventListener('click', event => {
+        if (event.target === importModal) cancelGLBImport();
+      });
+      document.addEventListener('keydown', event => {
+        if (event.key === 'Escape' && pendingGLBImport) cancelGLBImport();
+      });
+
+      setupLibraryFiltering();
+    }
+
+    function setupLibraryFiltering() {
+      const searchInput = document.getElementById('library-search');
+      searchInput?.addEventListener('input', filterLibraryItems);
+      document.querySelectorAll('[data-library-filter]').forEach(button => {
+        button.addEventListener('click', () => {
+          activeLibraryFilter = button.dataset.libraryFilter || 'all';
+          document.querySelectorAll('[data-library-filter]').forEach(tab => {
+            const active = tab === button;
+            tab.classList.toggle('is-active', active);
+            tab.setAttribute('aria-pressed', String(active));
+          });
+          filterLibraryItems();
+        });
+      });
+      document.addEventListener('keydown', event => {
+        if (event.key !== '/' || event.ctrlKey || event.metaKey || event.altKey) return;
+        if (['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName)) return;
+        event.preventDefault();
+        searchInput?.focus();
+      });
+      filterLibraryItems();
+    }
+
+    function filterLibraryItems() {
+      const query = (document.getElementById('library-search')?.value || '').trim().toLocaleLowerCase();
+      document.querySelectorAll('[data-library-item]').forEach(card => {
+        const category = card.dataset.libraryCategory || 'custom';
+        const categoryMatches = activeLibraryFilter === 'all' ||
+          activeLibraryFilter === category ||
+          (activeLibraryFilter === 'devices' && ['motors', 'custom'].includes(category));
+        const nameMatches = !query || (card.dataset.libraryName || '').toLocaleLowerCase().includes(query);
+        card.hidden = !categoryMatches || !nameMatches;
+      });
+
+      document.querySelectorAll('[data-library-folder]').forEach(folder => {
+        const category = folder.dataset.libraryFolder;
+        const categoryMatches = activeLibraryFilter === 'all' || activeLibraryFilter === category ||
+          (activeLibraryFilter === 'devices' && ['motors', 'custom'].includes(category));
+        const hasMatches = [...folder.querySelectorAll('[data-library-item]')].some(card => !card.hidden);
+        folder.hidden = !categoryMatches || (query.length > 0 && !hasMatches);
+        if (!folder.hidden && (query || activeLibraryFilter !== 'all')) folder.open = true;
+      });
+    }
+
+    function createFallbackLibraryThumbnail() {
+      const canvas = document.createElement('canvas');
+      canvas.width = 160;
+      canvas.height = 160;
+      const context = canvas.getContext('2d');
+      const gradient = context.createLinearGradient(20, 20, 140, 140);
+      gradient.addColorStop(0, '#164e63');
+      gradient.addColorStop(1, '#0f172a');
+      context.fillStyle = gradient;
+      context.fillRect(0, 0, 160, 160);
+      context.strokeStyle = 'rgba(103,232,249,0.9)';
+      context.lineWidth = 5;
+      context.lineJoin = 'round';
+      context.beginPath();
+      context.moveTo(48, 58);
+      context.lineTo(82, 38);
+      context.lineTo(116, 58);
+      context.lineTo(116, 101);
+      context.lineTo(82, 121);
+      context.lineTo(48, 101);
+      context.closePath();
+      context.moveTo(82, 38);
+      context.lineTo(82, 80);
+      context.lineTo(116, 58);
+      context.moveTo(82, 80);
+      context.lineTo(48, 58);
+      context.moveTo(82, 80);
+      context.lineTo(82, 121);
+      context.stroke();
+      return canvas.toDataURL('image/png');
     }
 
     function setupMobileSidebar() {
@@ -124,11 +219,57 @@ const STORAGE_KEY = 'zmrobo_system_models_v1';
     }
 
     function handleGLBFileInput(file) {
+      if (!file) return;
+      if (!/\.(glb|gltf)$/i.test(file.name)) {
+        showToast('Chỉ hỗ trợ file .GLB hoặc .GLTF.', 'error');
+        return;
+      }
       const reader = new FileReader();
       reader.onload = (evt) => {
-        parseGLBBuffer(evt.target.result, file.name);
+        parseGLBBuffer(evt.target.result, file.name, { pendingImport: true });
       };
+      reader.onerror = () => showToast('Không thể đọc file GLB.', 'error');
       reader.readAsArrayBuffer(file);
+    }
+
+    function cancelGLBImport() {
+      pendingGLBImport = null;
+      document.getElementById('glb-import-modal')?.classList.add('hidden');
+    }
+
+    function confirmGLBImport(event) {
+      event?.preventDefault();
+      if (!pendingGLBImport) return;
+
+      const name = document.getElementById('glb-import-name').value.trim();
+      const category = document.getElementById('glb-import-category').value;
+      if (!name || !libraryItemsByCategory[category]) return;
+
+      const { root, fileName, buffer, thumbnail, holes } = pendingGLBImport;
+      const itemId = 'glb_library_' + Date.now();
+      root.userData = {
+        id: itemId,
+        name,
+        holes,
+        holesCount: holes.length,
+        kind: getLibraryPartKind(category),
+        category,
+        isPin: category === 'pins',
+        isCustomPart: true
+      };
+      registerCustomInventoryItem({
+        id: itemId,
+        name,
+        category,
+        holesCount: holes.length,
+        modelScene: root,
+        thumbnail,
+        sourceGLBBuffer: buffer.slice(0)
+      });
+      saveModelToSystem(itemId, name, holes.length, thumbnail, buffer, category);
+      pendingGLBImport = null;
+      document.getElementById('glb-import-modal')?.classList.add('hidden');
+      showToast(`Đã thêm "${name}" vào thư viện`);
     }
 
     // ==============================================================
@@ -152,18 +293,48 @@ const STORAGE_KEY = 'zmrobo_system_models_v1';
       thumbScene.add(dirLight);
 
       const modelClone = object3D.clone();
+      const badgeGroup = modelClone.getObjectByName('badges');
+      if (badgeGroup) badgeGroup.parent?.remove(badgeGroup);
       thumbScene.add(modelClone);
 
+      thumbScene.updateMatrixWorld(true);
       const box = new THREE.Box3().setFromObject(modelClone);
       const center = new THREE.Vector3();
       box.getCenter(center);
-      modelClone.position.sub(center); 
-
       const size = new THREE.Vector3();
       box.getSize(size);
-      const maxDim = Math.max(size.x, size.y, size.z);
-      thumbCamera.position.set(maxDim * 2.0, maxDim * 1.5, maxDim * 2.0);
-      thumbCamera.lookAt(0, 0, 0);
+      const radius = Math.max(size.length() * 0.5, 0.01);
+      const fillRatio = 0.86;
+      const cameraAway = new THREE.Vector3(1, 0.75, 1).normalize();
+      thumbCamera.position.copy(center).add(cameraAway);
+      thumbCamera.lookAt(center);
+      thumbCamera.updateMatrixWorld(true);
+
+      const cameraRight = new THREE.Vector3().setFromMatrixColumn(thumbCamera.matrixWorld, 0);
+      const cameraUp = new THREE.Vector3().setFromMatrixColumn(thumbCamera.matrixWorld, 1);
+      const cameraDepth = new THREE.Vector3().setFromMatrixColumn(thumbCamera.matrixWorld, 2);
+      const tanHalfVertical = Math.tan(THREE.MathUtils.degToRad(thumbCamera.fov * 0.5));
+      const tanHalfHorizontal = tanHalfVertical * thumbCamera.aspect;
+      let fitDistance = 0;
+
+      for (const x of [box.min.x, box.max.x]) {
+        for (const y of [box.min.y, box.max.y]) {
+          for (const z of [box.min.z, box.max.z]) {
+            const offset = new THREE.Vector3(x, y, z).sub(center);
+            const depth = offset.dot(cameraDepth);
+            const horizontalDistance = Math.abs(offset.dot(cameraRight)) / (tanHalfHorizontal * fillRatio);
+            const verticalDistance = Math.abs(offset.dot(cameraUp)) / (tanHalfVertical * fillRatio);
+            fitDistance = Math.max(fitDistance, depth + horizontalDistance, depth + verticalDistance);
+          }
+        }
+      }
+
+      fitDistance = Math.max(fitDistance * 1.025, radius * 1.05);
+      thumbCamera.position.copy(center).addScaledVector(cameraAway, fitDistance);
+      thumbCamera.near = Math.max(fitDistance - radius * 2.5, 0.001);
+      thumbCamera.far = fitDistance + radius * 2.5;
+      thumbCamera.lookAt(center);
+      thumbCamera.updateProjectionMatrix();
 
       thumbRenderer.render(thumbScene, thumbCamera);
       const dataURL = canvas.toDataURL('image/png');
@@ -228,41 +399,45 @@ const STORAGE_KEY = 'zmrobo_system_models_v1';
         });
         root.add(badgeGroup);
 
-        const cleanName = fileName.replace(/\.[^/.]+$/, "");
+        const cleanName = options.name || fileName.replace(/\.[^/.]+$/, "");
         const partId = options.originalId || 'glb_' + Date.now();
-        root.userData = { id: partId, name: cleanName, holes: detectedHoles, isCustomPart: true };
-
-        // Chỉ đưa vào 3D Scene khi người dùng chủ động Add (Không add khi F5 restore)
-        if (!options.isRestoring) {
-          scene.add(root);
-          parts.push(root);
-          if (typeof placePartOnGround === 'function') placePartOnGround(root);
-          if (typeof placeNewPartInEmptySpace === 'function') placeNewPartInEmptySpace(root);
-          selectPart(root);
-          updatePartsCount();
-          fitCameraToParts([root]);
-          recordHistoryState();
-        }
-
-        // Tái sử dụng thumbnail từ storage (đỡ lag) hoặc tạo mới nếu là import thủ công
-        const thumbnailData = options.thumbnail || generateGLBThumbnail(root);
-
-        // Đăng ký trực tiếp vào thẻ UI (Luôn chạy để hiển thị ra danh sách)
-        registerCustomInventoryItem({
+        const category = options.category || 'custom';
+        root.userData = {
           id: partId,
           name: cleanName,
+          holes: detectedHoles,
           holesCount: detectedHoles.length,
-          modelScene: root.clone(),
-          thumbnail: thumbnailData 
-        });
+          kind: getLibraryPartKind(category),
+          category,
+          isPin: category === 'pins',
+          isCustomPart: true
+        };
 
-        // Chỉ lưu xuống bộ nhớ LocalStorage nếu đây là file mới được nhập tay vào
-        if (!options.isRestoring) {
-          saveModelToSystem(partId, cleanName, detectedHoles.length, thumbnailData, buffer);
-          showToast(`Đã nhập "${cleanName}" (${detectedHoles.length} Sockets)`);
+        const thumbnailData = getLibraryThumbnail(root, options.thumbnail);
+
+        if (options.isRestoring) {
+          registerCustomInventoryItem({
+            id: partId,
+            name: cleanName,
+            category,
+            holesCount: detectedHoles.length,
+            modelScene: root,
+            thumbnail: thumbnailData,
+            sourceGLBData: options.sourceGLBData || null
+          });
+          options.onRestored?.(partId);
+          return;
         }
+
+        pendingGLBImport = { root, fileName, buffer, thumbnail: thumbnailData, holes: detectedHoles };
+        document.getElementById('glb-import-file-name').textContent = fileName;
+        document.getElementById('glb-import-name').value = cleanName;
+        document.getElementById('glb-import-category').value = 'custom';
+        document.getElementById('glb-import-modal').classList.remove('hidden');
+        document.getElementById('glb-import-name').focus();
       }, (err) => {
         console.error(err);
+        options.onRestoreError?.(err);
         if (!options.isRestoring) showToast("Không thể giải mã tệp .GLB!", "error");
       });
     }
@@ -270,32 +445,46 @@ const STORAGE_KEY = 'zmrobo_system_models_v1';
     function registerCustomInventoryItem(item) {
       if (typeof customInventory === 'undefined') window.customInventory = [];
       
-      // Chặn duplicate: Tránh đăng ký 2 lần nếu thẻ bài đã tồn tại trên màn hình
       if (customInventory.some(i => i.id === item.id)) return;
 
+      const category = libraryItemsByCategory[item.category] ? item.category : 'custom';
+      item.category = category;
       customInventory.push(item);
-      const countEl = document.getElementById('custom-inventory-count');
-      if (countEl) countEl.textContent = `${customInventory.length} model`;
-      
-      const emptyMsg = document.getElementById('empty-inventory-msg');
-      if (emptyMsg) emptyMsg.classList.add('hidden');
+      libraryItemsByCategory[category].push(item);
+      const emptyMotors = document.getElementById('empty-motors-msg');
+      if (emptyMotors && ['motors', 'custom'].includes(category)) emptyMotors.classList.add('hidden');
 
-      const list = document.getElementById('custom-inventory-list');
+      const listCategory = category === 'custom' ? 'motors' : category;
+      const list = document.getElementById(`library-${listCategory}-list`);
       if (!list) return;
 
-      const card = document.createElement('div');
-      card.className = 'p-2 rounded-xl border border-cyan-500/40 bg-slate-900 flex items-center justify-between gap-2 mb-2';
-      card.innerHTML = `
-        <div class="flex items-center gap-2.5 min-w-0">
-          <img src="${item.thumbnail || ''}" class="w-10 h-10 object-cover rounded-md border border-slate-700 bg-slate-950 flex-shrink-0" alt="Thumb">
-          <div class="min-w-0 pr-2">
-            <p class="text-xs font-bold text-cyan-300 truncate">${item.name}</p>
-            <p class="text-[10px] text-slate-400 font-mono">${item.holesCount} Sockets</p>
-          </div>
-        </div>
-        <button onclick="spawnFromCustomInventory('${item.id}')" class="px-2.5 py-1 rounded-lg bg-cyan-500 text-slate-950 text-xs font-bold hover:bg-cyan-400 transition-colors flex-shrink-0">Thêm</button>
-      `;
+      const card = document.createElement('button');
+      card.type = 'button';
+      card.className = 'library-thumbnail-card library-imported-item';
+      card.dataset.libraryItem = '';
+      card.dataset.libraryCategory = category;
+      card.dataset.libraryName = item.name;
+      card.dataset.sockets = String(item.holesCount || 0);
+      card.title = item.name;
+      card.setAttribute('aria-label', `Thêm ${item.name} vào Canvas`);
+      const preview = document.createElement('img');
+      preview.src = item.thumbnail || '';
+      preview.alt = '';
+      preview.onerror = () => { preview.src = createFallbackLibraryThumbnail(); };
+      card.append(preview);
+      card.addEventListener('click', () => spawnFromCustomInventory(item.id));
       list.appendChild(card);
+      filterLibraryItems();
+    }
+
+    function getLibraryThumbnail(model, existingThumbnail) {
+      if (existingThumbnail) return existingThumbnail;
+      try {
+        return generateGLBThumbnail(model);
+      } catch (error) {
+        console.warn('Không thể tạo thumbnail GLB, dùng ảnh đại diện mặc định.', error);
+        return createFallbackLibraryThumbnail();
+      }
     }
 
     function spawnFromCustomInventory(id) {
@@ -303,17 +492,20 @@ const STORAGE_KEY = 'zmrobo_system_models_v1';
       if (!item) return;
       
       const clone = item.modelScene.clone();
-      clone.position.set(0, 0, 0); 
+      clone.position.set(0, 0, 0);
       clone.userData.id = 'glb_' + Date.now();
+      clone.userData.name = item.name;
+      clone.userData.category = item.category;
+      clone.userData.kind = getLibraryPartKind(item.category);
+      clone.userData.isPin = item.category === 'pins';
+      clone.userData.libraryItemId = item.id;
       
       scene.add(clone);
       parts.push(clone);
 
-      if (typeof placePartOnGround === 'function') placePartOnGround(clone);
-      if (typeof placeNewPartInEmptySpace === 'function') placeNewPartInEmptySpace(clone);
-
       selectPart(clone);
       updatePartsCount();
+      fitCameraToParts([clone]);
       recordHistoryState();
       showToast(`Đã thêm bản sao "${item.name}"`);
     }

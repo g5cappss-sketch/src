@@ -17,7 +17,9 @@
           assemblyPos: hasKinematicHierarchy ? null : assemblyGroup?.position.clone() || null,
           assemblyRot: hasKinematicHierarchy ? null : assemblyGroup?.rotation.clone() || null,
           color: p.userData.color,
-          holesCount: (p.userData.holes || []).length
+          holesCount: (p.userData.holes || []).length,
+          libraryItemId: p.userData.libraryItemId || null,
+          category: p.userData.category || null
         };
       });
 
@@ -98,10 +100,9 @@
 
       if (restoreWorldSpace) reconcileRigidAssemblies();
       updatePartsCount();
-      updateJoinWizardUI();
       updateJointsUI();
       if (selectedPart && toolMode !== 'select') {
-        transformControls.attach(getTransformTargetForPart(selectedPart, toolMode));
+        attachTransformControlsForPart(selectedPart, toolMode);
       }
     }
 
@@ -149,6 +150,26 @@
 
     function rebuildProjectPartFromSnapshot(data) {
       if (!data || !data.kind) return null;
+
+      if (data.libraryItemId) {
+        const libraryItem = customInventory.find(item => item.id === data.libraryItemId);
+        if (libraryItem?.modelScene) {
+          const part = libraryItem.modelScene.clone();
+          const category = data.category || libraryItem.category;
+          part.userData = {
+            ...part.userData,
+            id: data.id,
+            name: data.name || libraryItem.name,
+            kind: category === 'pins' ? 'pin' : category === 'beams' ? 'beam' : category === 'motors' ? 'motor' : 'custom',
+            category,
+            libraryItemId: libraryItem.id,
+            isPin: category === 'pins'
+          };
+          scene.add(part);
+          parts.push(part);
+          return part;
+        }
+      }
 
       if (data.kind === 'beam') {
         const part = spawnTechnicBeam(data.holesCount || 7, data.color || 0x94a3b8, data.name || 'Dầm Kỹ Thuật', { skipHistory: true, skipSelect: true });

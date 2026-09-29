@@ -21,9 +21,6 @@
         partToDelete.parent?.remove(partToDelete);
       parts = parts.filter(p => p !== partToDelete);
         joints = joints.filter(j => j.partA !== partToDelete && j.partB !== partToDelete && j.pin !== partToDelete);
-      if (pickedFirstPart === partToDelete) pickedFirstPart = null;
-      if (pickedSecondPart === partToDelete) pickedSecondPart = null;
-      updateJoinWizardUI();
       updateJointsUI();
       updatePartsCount();
       recordHistoryState();
@@ -35,10 +32,7 @@
       parts.forEach(p => scene.remove(p));
       parts = [];
       joints = [];
-      pickedFirstPart = null;
-      pickedSecondPart = null;
       selectPart(null);
-      updateJoinWizardUI();
       updateJointsUI();
       updatePartsCount();
       if (!skipHistory) {
@@ -50,6 +44,7 @@
     function updatePartsCount() {
       document.getElementById('badge-parts-count').textContent = `${parts.length} Linh kiện`;
       updateCanvasPartsListUI();
+      updateJointsUI();
     }
 
     function setCameraView(view) {

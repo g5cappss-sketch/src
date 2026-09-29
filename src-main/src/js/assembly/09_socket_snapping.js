@@ -89,7 +89,7 @@ function getWorldSocketPosition(part, socket) {
             if (wouldPenetrateGround) continue;
 
             if (!nearest || distance < nearest.distance) {
-              nearest = { pinSocket, targetPart, targetSocket, targetPosition, distance };
+              nearest = { pinSocket, targetPart, targetSocket, targetPosition, desiredWorldPosition, distance };
             }
           }
         }
@@ -313,30 +313,7 @@ function getWorldSocketPosition(part, socket) {
 
     function reconcileRigidAssemblies() {
       restoreRotationPivot();
-      const structuralParts = parts.filter(part => !part.userData?.isPin);
-      const pinsByPair = new Map();
-
-      [...new Set(joints.map(joint => joint.pin).filter(pin => pin?.userData?.isPin))]
-        .forEach(pin => {
-          const participants = [...getPinParticipants(pin)].filter(part => structuralParts.includes(part));
-          for (let firstIndex = 0; firstIndex < participants.length; firstIndex++) {
-            for (let secondIndex = firstIndex + 1; secondIndex < participants.length; secondIndex++) {
-              const first = participants[firstIndex];
-              const second = participants[secondIndex];
-              const key = [first.userData.id, second.userData.id].sort().join('|');
-              if (!pinsByPair.has(key)) pinsByPair.set(key, { parts: [first, second], pins: new Set() });
-              pinsByPair.get(key).pins.add(pin);
-            }
-          }
-        });
-
-      const connections = new Map(structuralParts.map(part => [part, new Set()]));
-      pinsByPair.forEach(({ parts: pairParts, pins }) => {
-        if (pins.size < 2) return;
-        connections.get(pairParts[0]).add(pairParts[1]);
-        connections.get(pairParts[1]).add(pairParts[0]);
-      });
-
+      const { structuralParts } = updateRigidClusters();
       const oldGroups = new Set(parts
         .map(part => part.parent)
         .filter(parent => parent?.userData.isAssemblyGroup && !parent.userData.isRotationPivotGroup));
@@ -345,31 +322,27 @@ function getWorldSocketPosition(part, socket) {
         group.parent?.remove(group);
       });
 
-      const remaining = new Set(structuralParts);
-      while (remaining.size) {
-        const component = new Set();
-        const pending = [remaining.values().next().value];
-        while (pending.length) {
-          const current = pending.pop();
-          if (!remaining.delete(current)) continue;
-          component.add(current);
-          connections.get(current).forEach(neighbor => pending.push(neighbor));
-        }
-        if (component.size < 2) continue;
+      const partsByCluster = new Map();
+      structuralParts.forEach(part => {
+        if (!partsByCluster.has(part.userData.clusterId)) partsByCluster.set(part.userData.clusterId, []);
+        partsByCluster.get(part.userData.clusterId).push(part);
+      });
 
-        const members = [...component];
-        const componentPins = [...new Set(joints.map(joint => joint.pin).filter(pin => pin?.userData?.isPin))]
-          .filter(pin => {
-            const participants = getPinParticipants(pin);
-            return participants.size > 0 && [...participants].every(part => component.has(part));
-          });
-        members.push(...componentPins);
+      const allPins = [...new Set(joints.map(joint => joint.pin).filter(pin => pin?.userData?.isPin))];
+      partsByCluster.forEach((clusterParts, clusterId) => {
+        if (clusterParts.length < 2) return;
+        const clusterPartSet = new Set(clusterParts);
+        const clusterPins = allPins.filter(pin => {
+          const participants = getPinParticipants(pin);
+          return participants.size > 0 && [...participants].every(part => clusterPartSet.has(part));
+        });
 
         const assemblyGroup = new THREE.Group();
         assemblyGroup.userData.isAssemblyGroup = true;
+        assemblyGroup.userData.clusterId = clusterId;
         scene.add(assemblyGroup);
-        members.forEach(member => assemblyGroup.attach(member));
-      }
+        [...clusterParts, ...clusterPins].forEach(member => assemblyGroup.attach(member));
+      });
     }
 
     // Tách 1 linh kiện ra khỏi cụm
@@ -596,4 +569,47 @@ function getWorldSocketPosition(part, socket) {
 
     function hasKinematicParent(part) {
       return getKinematicEdges().some(edge => edge.child === part);
+    }
+
+    function updateRigidClusters() {
+      const structuralParts = parts.filter(part => !part.userData?.isPin);
+      const pinCountsByPair = new Map();
+
+      [...new Set(joints.map(joint => joint.pin).filter(pin => pin?.userData?.isPin))]
+        .forEach(pin => {
+          const participants = [...getPinParticipants(pin)].filter(part => structuralParts.includes(part));
+          for (let firstIndex = 0; firstIndex < participants.length; firstIndex++) {
+            for (let secondIndex = firstIndex + 1; secondIndex < participants.length; secondIndex++) {
+              const first = participants[firstIndex];
+              const second = participants[secondIndex];
+              const key = [first.userData.id, second.userData.id].sort().join('|');
+              if (!pinCountsByPair.has(key)) pinCountsByPair.set(key, { parts: [first, second], pins: new Set() });
+              pinCountsByPair.get(key).pins.add(pin);
+            }
+          }
+        });
+
+      const rigidNeighbors = new Map(structuralParts.map(part => [part, new Set()]));
+      pinCountsByPair.forEach(({ parts: pairParts, pins }) => {
+        if (pins.size < 2) return;
+        rigidNeighbors.get(pairParts[0]).add(pairParts[1]);
+        rigidNeighbors.get(pairParts[1]).add(pairParts[0]);
+      });
+
+      const unassigned = new Set(structuralParts);
+      while (unassigned.size) {
+        const seed = unassigned.values().next().value;
+        const cluster = [];
+        const pending = [seed];
+        while (pending.length) {
+          const current = pending.pop();
+          if (!unassigned.delete(current)) continue;
+          cluster.push(current);
+          rigidNeighbors.get(current).forEach(neighbor => pending.push(neighbor));
+        }
+        const clusterId = `rigid_cluster_${cluster.map(part => part.userData.id).sort().join('_')}`;
+        cluster.forEach(part => { part.userData.clusterId = clusterId; });
+      }
+
+      return { structuralParts, pinCountsByPair };
     }

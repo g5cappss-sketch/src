@@ -23,7 +23,7 @@
 
       function startDirectDrag(part, event) {
         if (typeof toolMode !== 'undefined' && toolMode !== 'select') return false;
-        if (part !== selectedPart || (typeof pickJoinMode !== 'undefined' && pickJoinMode)) return false;
+        if (part !== selectedPart) return false;
         if (hasKinematicParent(part)) return false;
 
         updatePointer(event);
@@ -48,6 +48,10 @@
       }
 
       function startJointRotationDrag(event) {
+        if (isPartLockedByMultiplePins(selectedPart)) {
+          showToast('Thanh đã bị khóa bằng hai chốt, không thể xoay', 'error');
+          return false;
+        }
         isJointRotationDragging = true;
         jointRotationLastX = event.clientX;
         jointRotationRemainder = 0;
@@ -219,31 +223,17 @@
               return;
             }
 
-            if (pickJoinMode === 'first') {
-              pickedFirstPart = targetPart;
-              updateJoinWizardUI();
-              cancelSnapMode();
-              showToast(`Đã chọn Đối tượng 1: ${targetPart.userData.name}`);
-            } else if (pickJoinMode === 'second') {
-              pickedSecondPart = targetPart;
-              updateJoinWizardUI();
-              cancelSnapMode();
-              showToast(`Đã chọn Đối tượng 2: ${targetPart.userData.name}`);
-            } else {
-              const wasAlreadySelected = targetPart === selectedPart;
-              selectPart(targetPart);
-              if (foundSocket) {
-                showToast(`Đã chọn Lỗ #${foundSocket.index} trên ${targetPart.userData.name}`);
-              }
-              if (wasAlreadySelected) startDirectDrag(targetPart, e);
+            const wasAlreadySelected = targetPart === selectedPart;
+            selectPart(targetPart);
+            if (foundSocket) {
+              showToast(`Đã chọn Lỗ #${foundSocket.index} trên ${targetPart.userData.name}`);
             }
+            if (wasAlreadySelected) startDirectDrag(targetPart, e);
             return;
           }
         }
 
-        if (!pickJoinMode && toolMode === 'select') {
-          selectPart(null);
-        }
+        if (toolMode === 'select') selectPart(null);
       });
     }
 
@@ -251,6 +241,7 @@
     function selectPart(part) {
       if (rotationPivotGroup && rotationPivotPart !== part) restoreRotationPivot();
       selectedPart = part;
+      if (typeof updateJointsUI === 'function') updateJointsUI();
       const hud = document.getElementById('floating-part-hud');
       const noSelect = document.getElementById('inspector-no-selection');
       const activePanel = document.getElementById('inspector-active-panel');
@@ -270,12 +261,9 @@
 
         document.getElementById('inspect-part-title').innerText = part.userData.name;
         document.getElementById('inspect-part-id').innerText = `ID: ${part.userData.id}`;
-        document.getElementById('inspect-sockets-count').innerText = (part.userData.holes || []).length;
 
         if (toolMode !== 'select') {
-          const transformTarget = getTransformTargetForPart(part, toolMode);
-          transformControls.attach(transformTarget);
-          transformControls.setMode(toolMode === 'rotate' ? 'rotate' : 'translate');
+          attachTransformControlsForPart(part, toolMode);
         } else {
           transformControls.detach();
         }
@@ -351,9 +339,6 @@
         scene.remove(part);
         parts = parts.filter(p => p !== part);
         joints = joints.filter(j => j.partA !== part && j.partB !== part);
-        if (pickedFirstPart === part) pickedFirstPart = null;
-        if (pickedSecondPart === part) pickedSecondPart = null;
-        updateJoinWizardUI();
         updateJointsUI();
         updatePartsCount();
         recordHistoryState();
