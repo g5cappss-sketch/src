@@ -345,10 +345,23 @@ const STORAGE_KEY = 'zmrobo_system_models_v1';
     // ==============================================================
     // 4. BỘ XỬ LÝ MODEL (GLB PARSER) & KẾT NỐI DANH SÁCH MENU UI
     // ==============================================================
+    function getModelLongitudinalAxis(model) {
+      model.updateMatrixWorld(true);
+      const bounds = new THREE.Box3().setFromObject(model);
+      if (bounds.isEmpty()) return [0, 1, 0];
+
+      const size = bounds.getSize(new THREE.Vector3());
+      const axisIndex = size.x >= size.y && size.x >= size.z ? 0 : size.y >= size.z ? 1 : 2;
+      const worldAxis = new THREE.Vector3().setComponent(axisIndex, 1);
+      return worldAxis.applyQuaternion(model.getWorldQuaternion(new THREE.Quaternion()).invert()).normalize().toArray();
+    }
+
     function parseGLBBuffer(buffer, fileName, options = {}) {
       const loader = new THREE.GLTFLoader();
       loader.parse(buffer, '', (gltf) => {
         const root = gltf.scene || gltf.scenes[0];
+        root.updateMatrixWorld(true);
+        const inverseRootQuaternion = root.getWorldQuaternion(new THREE.Quaternion()).invert();
         const detectedHoles = [];
         const garbage = [];
 
@@ -373,10 +386,16 @@ const STORAGE_KEY = 'zmrobo_system_models_v1';
             const dir = (partsName.includes('H') || partsName.includes('h')) ? 'horizontal' : 'vertical';
             const numPart = partsName.find(p => !isNaN(parseInt(p, 10)));
             const index = numPart ? parseInt(numPart, 10) : (detectedHoles.length + 1);
+            const localSocketQuaternion = inverseRootQuaternion.clone()
+              .multiply(child.getWorldQuaternion(new THREE.Quaternion()));
+            const hasExplicitNormal = 1 - Math.abs(localSocketQuaternion.w) > 1e-6;
+            const normal = dir === 'horizontal' || hasExplicitNormal
+              ? new THREE.Vector3(0, 0, 1).applyQuaternion(localSocketQuaternion).normalize()
+              : new THREE.Vector3(0, 1, 0);
             child.userData = { isSocketNode: true, index: index, type: dir };
 
             if (!detectedHoles.some(h => h.index === index && h.dir === dir)) {
-              detectedHoles.push({ index, x: child.position.x, y: child.position.y, z: child.position.z, dir, desc: child.userData.desc || `Lỗ #${index}` });
+              detectedHoles.push({ index, x: child.position.x, y: child.position.y, z: child.position.z, dir, normal: normal.toArray(), desc: child.userData.desc || `Lỗ #${index}` });
             }
           }
           if (child.isMesh && child.material) {
@@ -410,6 +429,7 @@ const STORAGE_KEY = 'zmrobo_system_models_v1';
           kind: getLibraryPartKind(category),
           category,
           isPin: category === 'pins',
+          pinAxis: category === 'pins' ? getModelLongitudinalAxis(root) : undefined,
           isCustomPart: true
         };
 
@@ -498,6 +518,7 @@ const STORAGE_KEY = 'zmrobo_system_models_v1';
       clone.userData.category = item.category;
       clone.userData.kind = getLibraryPartKind(item.category);
       clone.userData.isPin = item.category === 'pins';
+      if (clone.userData.isPin) clone.userData.pinAxis = item.modelScene.userData.pinAxis || [0, 1, 0];
       clone.userData.libraryItemId = item.id;
       
       scene.add(clone);
@@ -540,12 +561,18 @@ const STORAGE_KEY = 'zmrobo_system_models_v1';
           const dirCode = (h.dir === 'horizontal') ? 'H' : 'V';
           anchor.name = `SOCKET_HOLE_${dirCode}_${h.index}`;
           anchor.position.set(h.x, h.y, h.z);
+          const normal = Array.isArray(h.normal)
+            ? new THREE.Vector3(...h.normal)
+            : h.normal
+              ? new THREE.Vector3(h.normal.x, h.normal.y, h.normal.z)
+              : new THREE.Vector3(0, h.dir === 'horizontal' ? 0 : 1, h.dir === 'horizontal' ? 1 : 0);
+          anchor.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), normal.normalize());
           anchor.userData = { index: h.index, type: h.dir, desc: h.desc };
           socketGroup.add(anchor);
         });
         clonedPart.add(socketGroup);
 
-        clonedPart.userData.zmroboMetadata = { version: "1.0", holes: holes };
+        clonedPart.userData.zmroboMetadata = { version: "1.0", holes: holes.map(h => ({ ...h })) };
         exportGroup.add(clonedPart);
       });
 

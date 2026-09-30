@@ -30,6 +30,55 @@ function getWorldSocketPosition(part, socket) {
         : new THREE.Vector3(componentSocket.x, componentSocket.y, componentSocket.z);
     }
 
+    function getPinLongitudinalAxis(pin) {
+      const axis = pin.userData?.pinAxis;
+      if (Array.isArray(axis)) return new THREE.Vector3(...axis).normalize();
+      if (axis && typeof axis === 'object') return new THREE.Vector3(axis.x, axis.y, axis.z).normalize();
+      return new THREE.Vector3(0, 1, 0);
+    }
+
+    function getSocketLocalNormal(socket) {
+      const normal = socket.normal;
+      const isHorizontal = socket.dir === 'horizontal' || socket.type === 'horizontal';
+      const localNormal = Array.isArray(normal)
+        ? new THREE.Vector3(...normal)
+        : normal && typeof normal === 'object'
+          ? new THREE.Vector3(normal.x, normal.y, normal.z)
+          : isHorizontal
+            ? new THREE.Vector3(0, 0, 1)
+            : new THREE.Vector3(0, socket.y < 0 ? -1 : 1, 0);
+      if (!isHorizontal && socket.y < 0 && Math.abs(localNormal.y) > 0.999) localNormal.y = -Math.abs(localNormal.y);
+      return localNormal.normalize();
+    }
+
+    function getPinSnapQuaternion(pin, targetPart, targetSocket, pinSocket) {
+      const targetQuaternion = targetPart.getWorldQuaternion(new THREE.Quaternion());
+      const isHorizontal = targetSocket.dir === 'horizontal' || targetSocket.type === 'horizontal';
+      const isBottomVertical = !isHorizontal && targetSocket.y < 0;
+      if (!isHorizontal && !isBottomVertical) return targetQuaternion;
+
+      const pinAxis = getPinLongitudinalAxis(pin);
+      const pinSocketPosition = new THREE.Vector3(pinSocket.x, pinSocket.y, pinSocket.z);
+      if (pinSocketPosition.dot(pinAxis) < 0) pinAxis.negate();
+      const rotationOffset = new THREE.Quaternion().setFromUnitVectors(
+        pinAxis,
+        getSocketLocalNormal(targetSocket)
+      );
+      return targetQuaternion.multiply(rotationOffset);
+    }
+
+    function getPinSnapPosition(pin, snap, desiredQuaternion) {
+      const isHorizontal = snap.targetSocket.dir === 'horizontal' || snap.targetSocket.type === 'horizontal';
+      const isBottomVertical = !isHorizontal && snap.targetSocket.y < 0;
+      if (!isHorizontal && !isBottomVertical) {
+        const rotatedSocket = new THREE.Vector3(snap.pinSocket.x, snap.pinSocket.y, snap.pinSocket.z)
+          .applyQuaternion(desiredQuaternion);
+        return snap.targetPosition.clone().sub(rotatedSocket);
+      }
+
+      return snap.targetPosition.clone();
+    }
+
     function getMagneticPartners(part) {
       const partners = [];
       joints.forEach(j => {
@@ -76,11 +125,13 @@ function getWorldSocketPosition(part, socket) {
 
           for (const targetSocket of targetPart.userData?.holes || []) {
             if (isMagneticSocketOccupied(targetPart, targetSocket, pin)) continue;
-            const targetPosition = getComponentSnapPosition(targetPart, targetSocket, pinSocket);
-            const alignedQuaternion = targetPart.getWorldQuaternion(new THREE.Quaternion());
-            const rotatedSocket = new THREE.Vector3(pinSocket.x, pinSocket.y, pinSocket.z)
-              .applyQuaternion(alignedQuaternion);
-            const desiredWorldPosition = targetPosition.clone().sub(rotatedSocket);
+            const isBottomVertical = targetSocket.dir !== 'horizontal' && targetSocket.type !== 'horizontal' && targetSocket.y < 0;
+            const targetPosition = isBottomVertical
+              ? getWorldSocketPosition(targetPart, targetSocket)
+              : getComponentSnapPosition(targetPart, targetSocket, pinSocket);
+            const candidate = { pinSocket, targetPart, targetSocket, targetPosition };
+            const alignedQuaternion = getPinSnapQuaternion(pin, targetPart, targetSocket, pinSocket);
+            const desiredWorldPosition = getPinSnapPosition(pin, candidate, alignedQuaternion);
             const distance = pinWorldPosition.distanceTo(desiredWorldPosition);
             const snapDistance = Math.max(maxDistance, targetPart.userData?.holesCount >= 11 ? 1.5 : 0);
             if (distance > snapDistance) continue;
@@ -420,15 +471,8 @@ function getWorldSocketPosition(part, socket) {
     }
 
    function snapPinToHole(pin, snap) {
-      const desiredWorldQuaternion = snap.targetPart.getWorldQuaternion(new THREE.Quaternion());
-      const isHorizontal = snap.targetSocket && (snap.targetSocket.dir === 'horizontal' || snap.targetSocket.type === 'horizontal');
-      if (isHorizontal) {
-        desiredWorldQuaternion.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2));
-      }
-      
-      const rotatedSocket = new THREE.Vector3(snap.pinSocket.x, snap.pinSocket.y, snap.pinSocket.z)
-        .applyQuaternion(desiredWorldQuaternion);
-      const desiredWorldPosition = snap.targetPosition.clone().sub(rotatedSocket);
+      const desiredWorldQuaternion = getPinSnapQuaternion(pin, snap.targetPart, snap.targetSocket, snap.pinSocket);
+      const desiredWorldPosition = getPinSnapPosition(pin, snap, desiredWorldQuaternion);
 
       // Gọi hàm hỗ trợ di chuyển
       movePartToDesiredWorld(pin, desiredWorldPosition, desiredWorldQuaternion);
