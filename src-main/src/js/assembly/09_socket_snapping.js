@@ -159,10 +159,12 @@ function getWorldSocketPosition(part, socket) {
       // 1. Phân tách chuẩn xác CỤM ĐANG KÉO (draggedGroup) và PHẦN CÒN LẠI (targetGroup)
       const draggedGroup = new Set();
       if (draggedPart.parent && draggedPart.parent.userData?.isAssemblyGroup) {
-        draggedPart.parent.children.forEach(child => {
+        // FIX LỖI "MÙ CHỐT": Dùng lệnh traverse để quét đệ quy rễ cây, moi bằng hết các linh kiện lồng nhau bên trong cụm
+        draggedPart.parent.traverse(child => {
           if (parts.includes(child)) draggedGroup.add(child);
         });
       } else {
+        // Nắm linh kiện lẻ
         draggedGroup.add(draggedPart);
       }
 
@@ -230,14 +232,12 @@ function getWorldSocketPosition(part, socket) {
               const componentSnapPosition = getComponentSnapPosition(component, componentSocket, pinSocket);
               const pinSocketPosition = getWorldSocketPosition(pin, pinSocket);
               
-              // FIX LỖI "BAY ĐI LINH TINH": Đo khoảng cách tuyệt đối trực tiếp, KHÔNG dùng lệnh .sub() phá hủy tọa độ
               const distance = componentSnapPosition.distanceTo(pinSocketPosition);
-                
               const snapDistance = Math.max(maxDistance, component.userData?.holesCount >= 11 ? 1.5 : 0);
+              
               if (distance > snapDistance) return;
 
               if (!nearest || distance < nearest.distance) {
-                // Clone pinSocketPosition để bảo toàn tọa độ thế giới khi đưa sang bước snap
                 nearest = { 
                   componentSocket, 
                   pin, 
