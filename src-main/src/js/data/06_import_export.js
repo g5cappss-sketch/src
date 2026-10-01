@@ -90,9 +90,54 @@ const STORAGE_KEY = 'zmrobo_system_models_v1';
     // ==============================================================
     function setupDragDrop() {
       const container = document.getElementById('canvas-container');
+      const canvas = document.getElementById('webgl-canvas');
       const overlay = document.getElementById('glb-drop-overlay');
+      const sidebar = document.getElementById('sidebar');
 
-      container.addEventListener('dragover', (e) => { e.preventDefault(); overlay.classList.remove('hidden'); });
+      sidebar.addEventListener('dragstart', event => {
+        const card = event.target.closest('[data-library-item][data-model-id]');
+        if (!card || !event.dataTransfer) return;
+        event.dataTransfer.setData('modelId', card.dataset.modelId);
+        event.dataTransfer.effectAllowed = 'copy';
+      });
+
+      const isModelDrag = event => Array.from(event.dataTransfer?.types || [])
+        .some(type => type.toLowerCase() === 'modelid');
+
+      canvas.addEventListener('dragover', event => {
+        if (!isModelDrag(event)) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'copy';
+      });
+      canvas.addEventListener('drop', event => {
+        const modelId = event.dataTransfer?.getData('modelId');
+        if (!modelId) return;
+        event.preventDefault();
+        event.stopPropagation();
+        overlay.classList.add('hidden');
+
+        const rect = canvas.getBoundingClientRect();
+        const mouse = new THREE.Vector2(
+          ((event.clientX - rect.left) / rect.width) * 2 - 1,
+          -((event.clientY - rect.top) / rect.height) * 2 + 1
+        );
+        const raycaster = new THREE.Raycaster();
+        raycaster.setFromCamera(mouse, camera);
+        const groundPoint = raycaster.ray.intersectPlane(
+          new THREE.Plane(new THREE.Vector3(0, 1, 0), 0),
+          new THREE.Vector3()
+        );
+        if (groundPoint) spawnLibraryModelAt(modelId, groundPoint);
+      });
+
+      container.addEventListener('dragover', event => {
+        event.preventDefault();
+        if (isModelDrag(event)) {
+          overlay.classList.add('hidden');
+          return;
+        }
+        overlay.classList.remove('hidden');
+      });
       container.addEventListener('dragleave', (e) => { e.preventDefault(); if (!container.contains(e.relatedTarget)) overlay.classList.add('hidden'); });
       container.addEventListener('drop', (e) => {
         e.preventDefault();
@@ -101,6 +146,38 @@ const STORAGE_KEY = 'zmrobo_system_models_v1';
           handleGLBFileInput(e.dataTransfer.files[0]);
         }
       });
+    }
+
+    function spawnLibraryModelAt(modelId, groundPoint) {
+      if (modelId.startsWith('custom:')) {
+        spawnFromCustomInventory(modelId.slice('custom:'.length), groundPoint);
+        return;
+      }
+
+      const card = [...document.querySelectorAll('[data-library-item][data-model-id]')]
+        .find(item => item.dataset.modelId === modelId);
+      if (!card) return;
+
+      const options = { skipHistory: true, skipSelect: true, spawnPoint: groundPoint };
+      const holesCount = Number(card.dataset.holesCount);
+      const color = Number(card.dataset.color);
+      let part = null;
+
+      if (card.dataset.spawnKind === 'beam') {
+        part = spawnTechnicBeam(holesCount, color, 'Dầm Kỹ Thuật', options);
+      } else if (card.dataset.spawnKind === 'dv-bar') {
+        part = spawnDVBar(holesCount, options);
+      } else if (card.dataset.spawnKind === 'yellow-bracket') {
+        part = spawnYellowBracket(options);
+      } else if (card.dataset.spawnKind === 'pin') {
+        part = spawnStandalonePin(color, options);
+      }
+
+      if (!part) return;
+      selectPart(part);
+      updatePartsCount();
+      recordHistoryState();
+      showToast(`Đã thêm ${part.userData.name}`);
     }
 
     function setupFileInputs() {
@@ -480,10 +557,12 @@ const STORAGE_KEY = 'zmrobo_system_models_v1';
 
       const card = document.createElement('button');
       card.type = 'button';
+      card.draggable = true;
       card.className = 'library-thumbnail-card library-imported-item';
       card.dataset.libraryItem = '';
       card.dataset.libraryCategory = category;
       card.dataset.libraryName = item.name;
+      card.dataset.modelId = `custom:${item.id}`;
       card.dataset.sockets = String(item.holesCount || 0);
       card.title = item.name;
       card.setAttribute('aria-label', `Thêm ${item.name} vào Canvas`);
@@ -492,7 +571,6 @@ const STORAGE_KEY = 'zmrobo_system_models_v1';
       preview.alt = '';
       preview.onerror = () => { preview.src = createFallbackLibraryThumbnail(); };
       card.append(preview);
-      card.addEventListener('click', () => spawnFromCustomInventory(item.id));
       list.appendChild(card);
       filterLibraryItems();
     }
@@ -507,12 +585,92 @@ const STORAGE_KEY = 'zmrobo_system_models_v1';
       }
     }
 
-    function spawnFromCustomInventory(id) {
+    const SPAWN_GAP = 2;
+    const SPAWN_MARGIN = 1;
+    let spawnOffset = {
+      x: GRID_ORIGIN_OFFSET - GRID_BOUNDARY + SPAWN_MARGIN,
+      z: GRID_ORIGIN_OFFSET - GRID_BOUNDARY + SPAWN_MARGIN,
+      rowDepth: 0
+    };
+
+    function getCustomModelSpawnPosition(bounds) {
+      const size = bounds.getSize(new THREE.Vector3());
+      const minX = GRID_ORIGIN_OFFSET - GRID_BOUNDARY + SPAWN_MARGIN;
+      const maxX = GRID_ORIGIN_OFFSET + GRID_BOUNDARY - SPAWN_MARGIN;
+      const minZ = minX;
+      const maxZ = GRID_ORIGIN_OFFSET + GRID_BOUNDARY - SPAWN_MARGIN;
+      if (size.x > maxX - minX || size.z > maxZ - minZ) return null;
+
+      if (!parts.some(part => part.visible)) {
+        spawnOffset = { x: minX, z: minZ, rowDepth: 0 };
+      }
+
+      let x = Math.max(spawnOffset.x, minX);
+      let z = Math.max(spawnOffset.z, minZ);
+      let rowDepth = spawnOffset.rowDepth;
+
+      while (true) {
+        if (x + size.x > maxX) {
+          x = minX;
+          z += rowDepth + SPAWN_GAP;
+          rowDepth = 0;
+        }
+        if (z + size.z > maxZ) return null;
+
+        const candidateBounds = bounds.clone().translate(new THREE.Vector3(
+          x - bounds.min.x,
+          -bounds.min.y,
+          z - bounds.min.z
+        ));
+        let nextX = x;
+
+        for (const part of parts) {
+          if (!part.visible) continue;
+          part.updateMatrixWorld(true);
+          const partBounds = getPartVisualBounds(part);
+          if (partBounds.isEmpty()) continue;
+
+          const overlapsZ = candidateBounds.max.z + SPAWN_GAP > partBounds.min.z &&
+            candidateBounds.min.z < partBounds.max.z + SPAWN_GAP;
+          const overlapsX = candidateBounds.max.x + SPAWN_GAP > partBounds.min.x &&
+            candidateBounds.min.x < partBounds.max.x + SPAWN_GAP;
+          if (overlapsX && overlapsZ) nextX = Math.max(nextX, partBounds.max.x + SPAWN_GAP);
+        }
+
+        if (nextX > x) {
+          x = nextX;
+          continue;
+        }
+
+        spawnOffset = {
+          x: candidateBounds.max.x + SPAWN_GAP,
+          z,
+          rowDepth: Math.max(rowDepth, size.z)
+        };
+        return new THREE.Vector3(x - bounds.min.x, -bounds.min.y, z - bounds.min.z);
+      }
+    }
+
+    function spawnFromCustomInventory(id, groundPoint = null) {
       const item = customInventory.find(x => x.id === id);
       if (!item) return;
       
       const clone = item.modelScene.clone();
       clone.position.set(0, 0, 0);
+      clone.updateMatrixWorld(true);
+      const bounds = new THREE.Box3().setFromObject(clone);
+      if (bounds.isEmpty()) return;
+      if (groundPoint) {
+        placePartAtGroundPoint(clone, groundPoint);
+      } else {
+        const spawnPosition = getCustomModelSpawnPosition(bounds);
+        if (!spawnPosition) {
+          showToast('Không còn đủ chỗ trống trên lưới để thêm model này', 'error');
+          return;
+        }
+        clone.position.copy(spawnPosition);
+        clone.updateMatrixWorld(true);
+      }
       clone.userData.id = 'glb_' + Date.now();
       clone.userData.name = item.name;
       clone.userData.category = item.category;
@@ -526,7 +684,7 @@ const STORAGE_KEY = 'zmrobo_system_models_v1';
 
       selectPart(clone);
       updatePartsCount();
-      fitCameraToParts([clone]);
+      if (!groundPoint) fitCameraToParts([clone]);
       recordHistoryState();
       showToast(`Đã thêm bản sao "${item.name}"`);
     }

@@ -51,31 +51,37 @@ function getWorldSocketPosition(part, socket) {
       return localNormal.normalize();
     }
 
-    function getPinSnapQuaternion(pin, targetPart, targetSocket, pinSocket) {
-      const targetQuaternion = targetPart.getWorldQuaternion(new THREE.Quaternion());
-      const isHorizontal = targetSocket.dir === 'horizontal' || targetSocket.type === 'horizontal';
-      const isBottomVertical = !isHorizontal && targetSocket.y < 0;
-      if (!isHorizontal && !isBottomVertical) return targetQuaternion;
-
-      const pinAxis = getPinLongitudinalAxis(pin);
-      const pinSocketPosition = new THREE.Vector3(pinSocket.x, pinSocket.y, pinSocket.z);
-      if (pinSocketPosition.dot(pinAxis) < 0) pinAxis.negate();
-      const rotationOffset = new THREE.Quaternion().setFromUnitVectors(
-        pinAxis,
-        getSocketLocalNormal(targetSocket)
-      );
-      return targetQuaternion.multiply(rotationOffset);
+   function getPinSnapQuaternion(pin, targetPart, targetSocket, pinSocket) {
+      const targetQuat = targetPart.getWorldQuaternion(new THREE.Quaternion());
+      // Lấy hướng pháp tuyến của lỗ (hướng ra ngoài)
+      const targetNormal = getSocketLocalNormal(targetSocket).applyQuaternion(targetQuat).normalize();
+      
+      // Hướng của đầu chốt đang cầm (Trục Y: Top=1, Bottom=-1)
+      const pinSocketNormal = new THREE.Vector3(0, Math.sign(pinSocket.y) || 1, 0);
+      
+      // Nguyên tắc cắm chốt: Đầu chốt phải hướng NGƯỢC LẠI với hướng lỗ để đâm vào trong
+      const desiredWorldNormal = targetNormal.clone().negate();
+      
+      const currentPinQuat = pin.getWorldQuaternion(new THREE.Quaternion());
+      const currentPinNormal = pinSocketNormal.clone().applyQuaternion(currentPinQuat).normalize();
+      
+      const alignQuat = new THREE.Quaternion().setFromUnitVectors(currentPinNormal, desiredWorldNormal);
+      return alignQuat.multiply(currentPinQuat);
     }
 
     function getPinSnapPosition(pin, snap, desiredQuaternion) {
-      const isHorizontal = snap.targetSocket.dir === 'horizontal' || snap.targetSocket.type === 'horizontal';
-      const isBottomVertical = !isHorizontal && snap.targetSocket.y < 0;
-      if (!isHorizontal && !isBottomVertical) {
-        const rotatedSocket = new THREE.Vector3(snap.pinSocket.x, snap.pinSocket.y, snap.pinSocket.z)
-          .applyQuaternion(desiredQuaternion);
-        return snap.targetPosition.clone().sub(rotatedSocket);
+      // Logic Lỗ Xuyên Thấu (Through-hole) cho Chốt
+      if (snap.targetSocket.dir === 'vertical') {
+        const targetWorldCenter = snap.targetPart.getWorldPosition(new THREE.Vector3());
+        
+        // CHÌA KHÓA: Nếu cầm nửa dưới đâm xuống thì đụng mặt trên lỗ. Cầm nửa trên đâm lên thì đụng mặt đáy lỗ.
+        const touchY = snap.pinSocket.y < 0 ? Math.abs(snap.targetSocket.y) : -Math.abs(snap.targetSocket.y);
+        const touchOffset = new THREE.Vector3(snap.targetSocket.x, touchY, snap.targetSocket.z)
+          .applyQuaternion(snap.targetPart.getWorldQuaternion(new THREE.Quaternion()));
+        
+        // Tâm vành cữ của chốt (0,0,0) luôn nằm chính xác ở mặt chạm
+        return targetWorldCenter.add(touchOffset);
       }
-
       return snap.targetPosition.clone();
     }
 
@@ -149,29 +155,103 @@ function getWorldSocketPosition(part, socket) {
       return nearest;
     }
 
-    function findNearestComponentSnap(part, maxDistance = 1.0, excludedPins = null) {
-      const componentSockets = part.userData.holes || [];
+    function findNearestAssemblySnap(draggedPart, maxDistance = 1.0) {
+      // 1. Phân tách chuẩn xác CỤM ĐANG KÉO (draggedGroup) và PHẦN CÒN LẠI (targetGroup)
+      const draggedGroup = new Set();
+      if (draggedPart.parent && draggedPart.parent.userData?.isAssemblyGroup) {
+        draggedPart.parent.children.forEach(child => {
+          if (parts.includes(child)) draggedGroup.add(child);
+        });
+      } else {
+        draggedGroup.add(draggedPart);
+      }
+
+      const draggedPins = [...draggedGroup].filter(p => p.userData?.isPin);
+      const draggedComponents = [...draggedGroup].filter(p => !p.userData?.isPin && p.userData?.holes?.length);
+      
+      const targetGroup = parts.filter(p => !draggedGroup.has(p));
+      const targetPins = targetGroup.filter(p => p.userData?.isPin);
+      const targetComponents = targetGroup.filter(p => !p.userData?.isPin && p.userData?.holes?.length);
+
       let nearest = null;
 
-      for (const componentSocket of componentSockets) {
-        const holePosition = getWorldSocketPosition(part, componentSocket);
-        for (const pin of parts) {
-          if (!pin.userData?.isPin || pin === part || excludedPins?.has(pin)) continue;
-          if (!canMagneticallyReattach(part, pin)) continue;
+      // 2. Phe Kéo (Chốt / Pin) đi tìm Phe Đích (Lỗ / Component)
+      draggedPins.forEach(pin => {
+        pin.updateMatrixWorld(true);
+        const pinWorldPosition = pin.getWorldPosition(new THREE.Vector3());
+        
+        const pinBounds = new THREE.Box3();
+        pin.traverse(child => { 
+          if (child.isMesh && !child.userData.isBadge && child.parent?.name !== 'badges') pinBounds.expandByObject(child); 
+        });
+        const pinBottomOffset = pinBounds.min.y - pinWorldPosition.y;
 
-          for (const pinSocket of pin.userData.holes || []) {
-            if (isMagneticSocketOccupied(pin, pinSocket, part)) continue;
-            if (isMagneticSocketOccupied(part, componentSocket, pin)) continue;
-            const holePosition = getComponentSnapPosition(part, componentSocket, pinSocket);
-            const pinPosition = getWorldSocketPosition(pin, pinSocket);
-            const distance = holePosition.distanceTo(pinPosition);
-            const snapDistance = Math.max(maxDistance, part.userData?.holesCount >= 11 ? 1.5 : 0);
-            if (distance <= snapDistance && (!nearest || distance < nearest.distance)) {
-              nearest = { componentSocket, pin, pinSocket, pinPosition, distance };
-            }
-          }
-        }
-      }
+        (pin.userData.holes || []).forEach(pinSocket => {
+          targetComponents.forEach(targetPart => {
+            if (!canMagneticallyReattach(pin, targetPart)) return;
+            if (isMagneticSocketOccupied(pin, pinSocket, targetPart)) return;
+
+            (targetPart.userData.holes || []).forEach(targetSocket => {
+              if (isMagneticSocketOccupied(targetPart, targetSocket, pin)) return;
+
+              const isBottomVertical = targetSocket.dir !== 'horizontal' && targetSocket.type !== 'horizontal' && targetSocket.y < 0;
+              const targetPosition = isBottomVertical
+                ? getWorldSocketPosition(targetPart, targetSocket)
+                : getComponentSnapPosition(targetPart, targetSocket, pinSocket);
+              
+              const snapCandidate = { pinSocket, targetPart, targetSocket, targetPosition };
+              const desiredQuaternion = getPinSnapQuaternion(pin, targetPart, targetSocket, pinSocket);
+              const desiredWorldPosition = getPinSnapPosition(pin, snapCandidate, desiredQuaternion);
+              
+              const distance = pinWorldPosition.distanceTo(desiredWorldPosition);
+              const snapDistance = Math.max(maxDistance, targetPart.userData?.holesCount >= 11 ? 1.5 : 0);
+              
+              if (distance > snapDistance || desiredWorldPosition.y + pinBottomOffset < -0.01) return;
+
+              if (!nearest || distance < nearest.distance) {
+                nearest = { ...snapCandidate, desiredWorldPosition, distance, snapType: 'pin-to-comp', activeItem: pin };
+              }
+            });
+          });
+        });
+      });
+
+      // 3. Phe Kéo (Lỗ / Component) đi tìm Phe Đích (Chốt / Pin)
+      draggedComponents.forEach(component => {
+        component.updateMatrixWorld(true);
+        (component.userData.holes || []).forEach(componentSocket => {
+          targetPins.forEach(pin => {
+            if (!canMagneticallyReattach(component, pin)) return;
+            if (isMagneticSocketOccupied(component, componentSocket, pin)) return;
+
+            (pin.userData.holes || []).forEach(pinSocket => {
+              if (isMagneticSocketOccupied(pin, pinSocket, component)) return;
+
+              const componentSnapPosition = getComponentSnapPosition(component, componentSocket, pinSocket);
+              const pinSocketPosition = getWorldSocketPosition(pin, pinSocket);
+              
+              // FIX LỖI "BAY ĐI LINH TINH": Đo khoảng cách tuyệt đối trực tiếp, KHÔNG dùng lệnh .sub() phá hủy tọa độ
+              const distance = componentSnapPosition.distanceTo(pinSocketPosition);
+                
+              const snapDistance = Math.max(maxDistance, component.userData?.holesCount >= 11 ? 1.5 : 0);
+              if (distance > snapDistance) return;
+
+              if (!nearest || distance < nearest.distance) {
+                // Clone pinSocketPosition để bảo toàn tọa độ thế giới khi đưa sang bước snap
+                nearest = { 
+                  componentSocket, 
+                  pin, 
+                  pinSocket, 
+                  pinPosition: pinSocketPosition.clone(), 
+                  distance, 
+                  snapType: 'comp-to-pin', 
+                  activeItem: component 
+                };
+              }
+            });
+          });
+        });
+      });
 
       return nearest;
     }
@@ -503,9 +583,22 @@ function getWorldSocketPosition(part, socket) {
       }
     }
 
-    function snapComponentToPin(part, snap) {
-      const desiredWorldQuaternion = part.getWorldQuaternion(new THREE.Quaternion());
+   function snapComponentToPin(part, snap) {
+      // FIX LỖI ĐÂM XUYÊN: Tự động tính toán và xoay Thanh dầm sao cho lỗ vuông góc với thân Chốt
+      const currentQuat = part.getWorldQuaternion(new THREE.Quaternion());
+      const compNormal = getSocketLocalNormal(snap.componentSocket).applyQuaternion(currentQuat).normalize();
+      
+      const pinQuat = snap.pin.getWorldQuaternion(new THREE.Quaternion());
+      const pinAxis = getPinLongitudinalAxis(snap.pin);
+      const pinSocketLocal = new THREE.Vector3(snap.pinSocket.x, snap.pinSocket.y, snap.pinSocket.z);
+      if (pinSocketLocal.dot(pinAxis) < 0) pinAxis.negate();
+      const worldPinAxis = pinAxis.applyQuaternion(pinQuat).normalize();
+      
+      // Tính toán góc xoay: Pháp tuyến của lỗ phải hướng ngược lại với hướng thò ra của chốt
+      const alignQuat = new THREE.Quaternion().setFromUnitVectors(compNormal, worldPinAxis.clone().negate());
+      const desiredWorldQuaternion = alignQuat.multiply(currentQuat);
 
+      // Tính toán vị trí tịnh tiến sau khi đã xoay chuẩn
       const rotatedHole = getLocalComponentSnapPosition(snap.componentSocket, snap.pinSocket)
         .applyQuaternion(desiredWorldQuaternion);
       const desiredWorldPosition = snap.pinPosition.clone().sub(rotatedHole);
@@ -532,6 +625,67 @@ function getWorldSocketPosition(part, socket) {
           pin: snap.pin,
           kinematicParent,
           kinematicChild
+        });
+
+        part.userData.magneticJointId = jointId;
+        part.userData.magneticSnapped = true;
+        if (typeof updateJointsUI === 'function') updateJointsUI();
+      }
+    }function snapComponentToPin(part, snap) {
+      const partQuat = part.getWorldQuaternion(new THREE.Quaternion());
+      const pinQuat = snap.pin.getWorldQuaternion(new THREE.Quaternion());
+      
+      const pinLocalNormal = new THREE.Vector3(0, Math.sign(snap.pinSocket.y) || 1, 0);
+      const pinWorldNormal = pinLocalNormal.applyQuaternion(pinQuat).normalize();
+      
+      const compLocalNormal = getSocketLocalNormal(snap.componentSocket);
+      const compWorldNormal = compLocalNormal.clone().applyQuaternion(partQuat).normalize();
+      
+      let desiredWorldNormal = pinWorldNormal.clone();
+      
+      // Lỗ xuyên thấu cho phép cắm 2 chiều: Chống hiện tượng thanh dầm bị lật ngửa bụng lên trời vô lý
+      if (snap.componentSocket.dir === 'vertical' && compWorldNormal.dot(pinWorldNormal) < 0) {
+        desiredWorldNormal.negate();
+      }
+      
+      const alignQuat = new THREE.Quaternion().setFromUnitVectors(compWorldNormal, desiredWorldNormal);
+      const desiredWorldQuaternion = alignQuat.multiply(partQuat);
+
+      // CHÌA KHÓA CHỐNG XUYÊN: Chọn mặt nào của thanh dầm để chạm vào vành cữ chốt?
+      let surfaceY = snap.componentSocket.y;
+      if (snap.componentSocket.dir === 'vertical') {
+        // Lắp vào nửa trên của chốt -> Đáy thanh dầm phải chạm vành cữ
+        // Lắp vào nửa dưới của chốt -> Mặt trên thanh dầm phải chạm vành cữ
+        surfaceY = snap.pinSocket.y > 0 ? -Math.abs(snap.componentSocket.y) : Math.abs(snap.componentSocket.y);
+      }
+
+      const holeLocalSurface = new THREE.Vector3(snap.componentSocket.x, surfaceY, snap.componentSocket.z);
+      const rotatedHoleOffset = holeLocalSurface.applyQuaternion(desiredWorldQuaternion);
+      
+      const pinWorldCenter = snap.pin.getWorldPosition(new THREE.Vector3());
+      const desiredWorldPosition = pinWorldCenter.clone().sub(rotatedHoleOffset);
+
+      movePartToDesiredWorld(part, desiredWorldPosition, desiredWorldQuaternion);
+
+      const currentJoint = joints.find(j => j.id.startsWith('magnetic_joint_') &&
+        j.partA === snap.pin && j.socketA === snap.pinSocket &&
+        j.partB === part && j.socketB === snap.componentSocket);
+
+      if (!currentJoint || currentJoint.partA !== snap.pin || currentJoint.socketA !== snap.pinSocket) {
+        detachMagneticSocket(part, snap.componentSocket);
+        detachMagneticSocket(snap.pin, snap.pinSocket);
+        const jointId = 'magnetic_joint_' + Date.now();
+        const pinHasSupport = getPinParticipants(snap.pin).size > 0;
+        
+        joints.push({
+          id: jointId,
+          partA: snap.pin,
+          partB: part,
+          socketA: snap.pinSocket,
+          socketB: snap.componentSocket,
+          pin: snap.pin,
+          kinematicParent: pinHasSupport ? snap.pin : part,
+          kinematicChild: pinHasSupport ? part : snap.pin
         });
 
         part.userData.magneticJointId = jointId;

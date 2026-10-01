@@ -4,6 +4,8 @@
     const HOLE_RADIUS = 0.298;      // Ø28.0mm -> r = 14.0mm = 0.298DV
     const BEAM_HEIGHT = 1.0;         // H = 1DV
     const GRID_CELL_SIZE = 1.0;     // 1 ô lưới = 1DV
+    const GRID_SIZE = 50 * GRID_CELL_SIZE;
+    const GRID_BOUNDARY = GRID_SIZE / 2;
     const GRID_ORIGIN_OFFSET = GRID_CELL_SIZE / 2;
     const COLLISION_TOLERANCE = 0.06;
 

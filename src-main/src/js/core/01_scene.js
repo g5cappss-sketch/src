@@ -1,13 +1,21 @@
-// --- HỘP THÔNG BÁO TOAST UI ---
+    // --- HỘP THÔNG BÁO TOAST UI ---
+    let toastTimeoutId = null;
+
     function showToast(message, type = 'success') {
       const toast = document.getElementById('toast-notification');
       const msg = document.getElementById('toast-message');
-      const icon = document.getElementById('toast-icon');
       if (!toast || !msg) return;
 
       msg.textContent = message;
+      toast.dataset.type = type;
+      toast.setAttribute('aria-live', type === 'error' ? 'assertive' : 'polite');
       toast.classList.remove('hidden');
-      setTimeout(() => { toast.classList.add('hidden'); }, 3200);
+      requestAnimationFrame(() => toast.classList.add('is-visible'));
+      clearTimeout(toastTimeoutId);
+      toastTimeoutId = setTimeout(() => {
+        toast.classList.remove('is-visible');
+        toastTimeoutId = setTimeout(() => toast.classList.add('hidden'), 180);
+      }, type === 'error' ? 3600 : 2400);
     }
 
     // --- KHỞI TẠO 3D SCENE ---
@@ -89,6 +97,7 @@
             settleAssemblyOnGround(transformTarget);
             snapPartPositionToGrid(transformTarget);
           }
+          clampPartToGrid(transformTarget);
           if (!transformTarget.userData.isRotationPivotGroup && hasPartCollision(selectedPart)) {
             const safe = transformTarget.userData.safeTransform || { position: transformTarget.position.clone(), quaternion: transformTarget.quaternion.clone(), scale: transformTarget.scale.clone() };
             transformTarget.position.copy(safe.position);

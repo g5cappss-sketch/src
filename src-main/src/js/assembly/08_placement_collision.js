@@ -83,6 +83,103 @@
       return bounds;
     }
 
+    function placePartAtGroundPoint(part, groundPoint) {
+      if (!part || !groundPoint) return;
+      part.updateMatrixWorld(true);
+      const bounds = getPartVisualBounds(part);
+      if (bounds.isEmpty()) return;
+
+      const worldPosition = part.getWorldPosition(new THREE.Vector3());
+      worldPosition.set(
+        groundPoint.x,
+        groundPoint.y + worldPosition.y - bounds.min.y,
+        groundPoint.z
+      );
+      part.position.copy(part.parent ? part.parent.worldToLocal(worldPosition) : worldPosition);
+      part.updateMatrixWorld(true);
+      clampPartToGrid(part);
+    }
+
+    function settlePartOnSupport(part) {
+      if (!part) return;
+
+      const movingRoot = part.parent?.userData?.isAssemblyGroup ? part.parent : part;
+      movingRoot.updateMatrixWorld(true);
+      const movingBounds = getPartVisualBounds(movingRoot);
+      if (movingBounds.isEmpty()) return;
+
+      const rayOrigin = new THREE.Vector3(
+        (movingBounds.min.x + movingBounds.max.x) / 2,
+        movingBounds.max.y + 0.01,
+        (movingBounds.min.z + movingBounds.max.z) / 2
+      );
+      const raycaster = new THREE.Raycaster(rayOrigin, new THREE.Vector3(0, -1, 0));
+      const targets = parts.filter(candidate => candidate !== part && candidate.parent !== movingRoot);
+      const intersections = raycaster.intersectObjects(targets, true);
+      let supportY = 0;
+
+      for (const intersection of intersections) {
+        let supportPart = intersection.object;
+        while (supportPart && !parts.includes(supportPart)) supportPart = supportPart.parent;
+        if (!supportPart || supportPart === part || supportPart.parent === movingRoot) continue;
+
+        const supportBounds = getPartVisualBounds(supportPart);
+        if (!supportBounds.isEmpty()) {
+          supportY = supportBounds.max.y;
+          break;
+        }
+      }
+
+      const worldPosition = movingRoot.getWorldPosition(new THREE.Vector3());
+      worldPosition.y += supportY - movingBounds.min.y;
+      movingRoot.position.copy(movingRoot.parent
+        ? movingRoot.parent.worldToLocal(worldPosition)
+        : worldPosition);
+      movingRoot.updateMatrixWorld(true);
+    }
+
+    function clampPartToGrid(part) {
+      if (!part) return;
+
+      const constrainedPart = part.parent?.userData?.isAssemblyGroup || part.parent?.userData?.isRotationPivotGroup
+        ? part.parent
+        : part;
+      constrainedPart.updateMatrixWorld(true);
+      const bounds = getPartVisualBounds(constrainedPart);
+      if (bounds.isEmpty()) return;
+
+      const minX = GRID_ORIGIN_OFFSET - GRID_BOUNDARY;
+      const maxX = GRID_ORIGIN_OFFSET + GRID_BOUNDARY;
+      const minZ = minX;
+      const maxZ = maxX;
+      const size = bounds.getSize(new THREE.Vector3());
+      const centerX = (minX + maxX) / 2;
+      const centerZ = (minZ + maxZ) / 2;
+      const offsetX = size.x > GRID_SIZE
+        ? centerX - (bounds.min.x + bounds.max.x) / 2
+        : bounds.min.x < minX
+          ? minX - bounds.min.x
+          : bounds.max.x > maxX
+            ? maxX - bounds.max.x
+            : 0;
+      const offsetZ = size.z > GRID_SIZE
+        ? centerZ - (bounds.min.z + bounds.max.z) / 2
+        : bounds.min.z < minZ
+          ? minZ - bounds.min.z
+          : bounds.max.z > maxZ
+            ? maxZ - bounds.max.z
+            : 0;
+
+      if (!offsetX && !offsetZ) return;
+      const worldPosition = constrainedPart.getWorldPosition(new THREE.Vector3());
+      worldPosition.x += offsetX;
+      worldPosition.z += offsetZ;
+      constrainedPart.position.copy(constrainedPart.parent
+        ? constrainedPart.parent.worldToLocal(worldPosition)
+        : worldPosition);
+      constrainedPart.updateMatrixWorld(true);
+    }
+
     function getConnectedAssemblyParts(rootPart) {
       const assembly = new Set([rootPart]);
       let changed = true;

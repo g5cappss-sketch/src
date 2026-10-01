@@ -8,6 +8,36 @@
     .sidebar-panel::-webkit-scrollbar,
     .sidebar-main-content::-webkit-scrollbar { display: none; width: 0; height: 0; }
 
+    .studio-toast {
+      position: absolute;
+      z-index: 40;
+      right: 18px;
+      bottom: 90px;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      width: max-content;
+      max-width: min(360px, calc(100% - 32px));
+      padding: 9px 12px;
+      border: 1px solid rgba(100, 116, 139, 0.38);
+      border-radius: 9px;
+      color: #d1d5db;
+      background: rgba(12, 16, 24, 0.92);
+      backdrop-filter: blur(12px);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.24);
+      font-size: 12px;
+      line-height: 1.4;
+      opacity: 0;
+      transform: translateY(6px);
+      pointer-events: none;
+      transition: opacity 180ms ease, transform 180ms ease;
+    }
+    .studio-toast.hidden { display: none; }
+    .studio-toast.is-visible { opacity: 1; transform: translateY(0); }
+    .studio-toast-icon { flex: 0 0 17px; width: 17px; height: 17px; color: #6ee7b7; }
+    .studio-toast[data-type="error"] { border-color: rgba(251, 113, 133, 0.34); }
+    .studio-toast[data-type="error"] .studio-toast-icon { color: #fda4af; }
+
     .viewport-header {
       position: absolute;
       z-index: 25;
@@ -350,6 +380,7 @@
       .header-tools { position: static; grid-column: 1 / -1; grid-row: 2; justify-self: center; transform: none; }
       #floating-part-hud { top: 6.5rem; left: 8px; }
       #snap-guide-banner { top: 6.5rem; }
+      .studio-toast { right: 10px; bottom: 86px; }
     }
     @media (max-width: 560px) {
       .brand-copy { display: none; }
@@ -366,4 +397,5 @@
       .dock-button, .dock-icon-button { min-width: 32px; padding: 0 7px; }
       .dock-divider { margin: 0 1px; }
       #floating-part-hud { max-width: calc(100% - 16px); }
+      .studio-toast { right: 8px; bottom: 82px; max-width: calc(100% - 16px); }
     }

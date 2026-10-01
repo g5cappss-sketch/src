@@ -14,6 +14,7 @@
       let dragStartQuaternion = null;
       let directDragIsKinematic = false;
       let collisionWasBlocked = false;
+      let assemblySnapMadeDuringDrag = false;
 
       function updatePointer(event) {
         const rect = canvas.getBoundingClientRect();
@@ -36,6 +37,7 @@
         dragStartPosition = worldPosition.clone();
         dragStartQuaternion = part.getWorldQuaternion(new THREE.Quaternion());
         collisionWasBlocked = false;
+        assemblySnapMadeDuringDrag = false;
         if (part.userData) part.userData.liftedAboveAssembly = false;
 
         directDragIsKinematic = Boolean(createRotationPivot(part) ||
@@ -91,24 +93,26 @@
         if (!isGrouped && typeof clampPartToGround === 'function') {
           clampPartToGround(selectedPart);
         }
+        clampPartToGrid(selectedPart);
 
         if (!directDragIsKinematic && selectedPart.userData.isPin) {
-          const snap = findNearestPinSnap(selectedPart, 2.25);
-          if (snap && (!isGrouped || snap.targetPart.parent !== selectedPart.parent)) {
-            snapPinToHole(selectedPart, snap);
-            collisionWasBlocked = false;
-            return;
-          }
-          if (!isGrouped && selectedPart.userData.magneticSnapped) detachMagneticJoints(selectedPart);
-        } else if (!directDragIsKinematic && !selectedPart.userData.isPin) {
-          if (!isGrouped && typeof snapPartPositionToGrid === 'function') snapPartPositionToGrid(selectedPart);
-          const snap = findNearestComponentSnap(selectedPart, 2.25);
-          if (snap && (!isGrouped || snap.pin.parent !== selectedPart.parent)) {
-            snapComponentToPin(selectedPart, snap);
-            collisionWasBlocked = false;
-            return;
-          }
-          if (!isGrouped && selectedPart.userData.magneticSnapped) detachMagneticJoints(selectedPart);
+        }
+        if (!directDragIsKinematic && !selectedPart.userData.isPin && !isGrouped &&
+          typeof snapPartPositionToGrid === 'function') {
+          snapPartPositionToGrid(selectedPart);
+        }
+
+        const snap = findNearestAssemblySnap(selectedPart, 2.25);
+        if (snap) {
+          if (snap.snapType === 'pin-to-comp') snapPinToHole(snap.activeItem, snap);
+          if (snap.snapType === 'comp-to-pin') snapComponentToPin(snap.activeItem, snap);
+          assemblySnapMadeDuringDrag = true;
+          clampPartToGrid(selectedPart);
+          collisionWasBlocked = false;
+          return;
+        }
+        if (!directDragIsKinematic && !isGrouped && selectedPart.userData.magneticSnapped) {
+          detachMagneticJoints(selectedPart);
         }
 
         selectedPart.updateMatrixWorld(true);
@@ -141,25 +145,13 @@
         canvas.releasePointerCapture(event.pointerId);
         canvas.style.cursor = '';
 
-        if (wasKinematicDrag && !hasKinematicParent(selectedPart) && !selectedPart.userData.isPin) {
-          const descendantPins = new Set([...rotationPivotParents.keys()]
-            .filter(member => member.userData?.isPin));
-          const snap = findNearestComponentSnap(selectedPart, 2.25, descendantPins);
-          if (snap) {
-            snapComponentToPin(selectedPart, snap);
-            reconcileRigidAssemblies();
-          }
+        const snap = findNearestAssemblySnap(selectedPart, 2.25);
+        if (snap && (wasKinematicDrag || !selectedPart.userData.magneticSnapped)) {
+          if (snap.snapType === 'pin-to-comp') snapPinToHole(snap.activeItem, snap);
+          if (snap.snapType === 'comp-to-pin') snapComponentToPin(snap.activeItem, snap);
+          assemblySnapMadeDuringDrag = true;
         }
-
-        if (!wasKinematicDrag && !selectedPart.userData.magneticSnapped) {
-          if (selectedPart.userData.isPin) {
-            const snap = findNearestPinSnap(selectedPart, 2.25);
-            if (snap) snapPinToHole(selectedPart, snap);
-          } else {
-            const snap = findNearestComponentSnap(selectedPart, 2.25);
-            if (snap) snapComponentToPin(selectedPart, snap);
-          }
-        }
+        if (wasKinematicDrag && assemblySnapMadeDuringDrag) reconcileRigidAssemblies();
 
         if (!wasKinematicDrag && selectedPart.userData.magneticSnapped) {
           const joint = joints.find(j => j.id === selectedPart.userData.magneticJointId);
@@ -167,14 +159,15 @@
         }
 
         if (wasKinematicDrag) restoreRotationPivot();
+        clampPartToGrid(selectedPart);
         directDragIsKinematic = false;
+  assemblySnapMadeDuringDrag = false;
 
         if (!wasKinematicDrag && !selectedPart.userData.magneticSnapped && hasPartCollision(selectedPart, null, true)) {
           movePartToDesiredWorld(selectedPart, dragStartPosition, dragStartQuaternion);
           showToast('Không thể di chuyển xuyên qua linh kiện khác', 'error');
-        } else if (!wasKinematicDrag && !selectedPart.userData.liftedAboveAssembly) {
-          settleAssemblyOnGround(selectedPart);
         }
+        if (!selectedPart.userData.magneticSnapped) settlePartOnSupport(selectedPart);
 
         if (wasKinematicDrag || selectedPart.userData.magneticSnapped) recordHistoryState();
         selectedPart.userData.liftedAboveAssembly = false;

@@ -1,5 +1,5 @@
     function spawnTechnicBeam(holesCount = 7, colorHex = 0x94a3b8, namePrefix = 'Dầm Kỹ Thuật', options = {}) {
-      const { skipHistory = false, skipSelect = false } = options;
+      const { skipHistory = false, skipSelect = false, spawnPoint = null } = options;
       const group = new THREE.Group();
       const { geom, halfLen } = createRealisticBeamGeometry(holesCount, BEAM_HEIGHT);
       const mat = new THREE.MeshStandardMaterial({
@@ -56,7 +56,8 @@
 
       scene.add(group);
       parts.push(group);
-      placeNewPartInEmptySpace(group);
+      if (spawnPoint) placePartAtGroundPoint(group, spawnPoint);
+      else placeNewPartInEmptySpace(group);
       if (!skipSelect) selectPart(group);
       updatePartsCount();
       if (!skipHistory) {
@@ -67,7 +68,7 @@
     }
 
     function spawnDVBar(holesCount = 5, options = {}) {
-      const { skipHistory = false, skipSelect = false } = options;
+      const { skipHistory = false, skipSelect = false, spawnPoint = null } = options;
       const group = new THREE.Group();
       const height = 1.0;
       const { geom, halfLen } = createRealisticBeamGeometry(holesCount, height);
@@ -107,7 +108,8 @@
 
       scene.add(group);
       parts.push(group);
-      placeNewPartInEmptySpace(group);
+      if (spawnPoint) placePartAtGroundPoint(group, spawnPoint);
+      else placeNewPartInEmptySpace(group);
       if (!skipSelect) selectPart(group);
       updatePartsCount();
       if (!skipHistory) {
@@ -118,7 +120,7 @@
     }
 
     function spawnYellowBracket(options = {}) {
-      const { skipHistory = false, skipSelect = false } = options;
+      const { skipHistory = false, skipSelect = false, spawnPoint = null } = options;
       const group = new THREE.Group();
       const height = 1.0;
       const { geom, halfLen } = createRealisticBeamGeometry(3, height);
@@ -157,7 +159,8 @@
 
       scene.add(group);
       parts.push(group);
-      placeNewPartInEmptySpace(group);
+      if (spawnPoint) placePartAtGroundPoint(group, spawnPoint);
+      else placeNewPartInEmptySpace(group);
       if (!skipSelect) selectPart(group);
       updatePartsCount();
       if (!skipHistory) {
@@ -168,7 +171,7 @@
     }
 
     function spawnStandalonePin(colorHex = 0x0284c7, options = {}) {
-      const { skipHistory = false, skipSelect = false } = options;
+      const { skipHistory = false, skipSelect = false, spawnPoint = null } = options;
       const group = new THREE.Group();
       const pinMat = new THREE.MeshStandardMaterial({ color: colorHex, roughness: 0.68, metalness: 0.0 });
 
@@ -217,7 +220,8 @@
 
       scene.add(group);
       parts.push(group);
-      placeNewPartInEmptySpace(group);
+      if (spawnPoint) placePartAtGroundPoint(group, spawnPoint);
+      else placeNewPartInEmptySpace(group);
       if (!skipSelect) selectPart(group);
       updatePartsCount();
       if (!skipHistory) {
