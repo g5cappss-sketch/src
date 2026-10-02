@@ -1,3 +1,5 @@
+
+
 function getWorldSocketPosition(part, socket) {
       part.updateMatrixWorld(true);
       return new THREE.Vector3(socket.x, socket.y, socket.z).applyMatrix4(part.matrixWorld);
@@ -109,6 +111,69 @@ function getWorldSocketPosition(part, socket) {
       return false;
     }
 
+    // HÀM KIỂM TRA ĐƯỜNG ĐI CỦA CHỐT (THROUGH-HOLE VALIDATION)
+    // Nhiệm vụ: Bắn tia laser theo chiều sâu chốt, kiểm tra xem có đâm qua tường đặc không.
+    // Nếu đụng tường mà không có lỗ thẳng hàng -> Chặn! Nếu có lỗ thẳng hàng -> Cho phép xuyên qua.
+    function isHoleBlockedBySolid(targetPart, targetSocket, draggedGroup) {
+      targetPart.updateMatrixWorld(true);
+      const holePos = getWorldSocketPosition(targetPart, targetSocket);
+      const targetQuat = targetPart.getWorldQuaternion(new THREE.Quaternion());
+      
+      // Hướng đâm sâu vào bên trong vật thể
+      const inwardDir = getSocketLocalNormal(targetSocket).applyQuaternion(targetQuat).negate().normalize();
+
+      // Khởi tạo tia laser lùi vào trong một khoảng nhỏ để tránh vướng chính bề mặt ngoài của lỗ
+      const rayOrigin = holePos.clone().addScaledVector(inwardDir, 0.05);
+      const raycaster = new THREE.Raycaster(rayOrigin, inwardDir);
+      
+      const requiredClearance = 0.95; // Chiều sâu tiêu chuẩn mà chốt cần đâm vào
+      const checkMeshes = [];
+
+      // Thu thập toàn bộ bề mặt khối (mesh) của các linh kiện khác ngoại trừ cụm đang kéo và chốt
+      parts.forEach(p => {
+        if (!draggedGroup.has(p) && !p.userData?.isPin) {
+          p.traverse(child => { 
+            if (child.isMesh && !child.userData.isBadge && child.parent?.name !== 'badges') {
+              checkMeshes.push(child); 
+            }
+          });
+        }
+      });
+
+      if (checkMeshes.length === 0) return false;
+
+      const intersects = raycaster.intersectObjects(checkMeshes, false);
+
+      for (let i = 0; i < intersects.length; i++) {
+        const hit = intersects[i];
+        if (hit.distance > requiredClearance) break;
+
+        let hitRoot = hit.object;
+        while (hitRoot && !parts.includes(hitRoot)) hitRoot = hitRoot.parent;
+
+        if (hitRoot && hitRoot.userData?.holes) {
+          let isPenetratingHole = false;
+          
+          // Kiểm tra xem điểm đâm trúng có nằm sát một cái lỗ hợp lệ nào khác không (Lỗ xuyên thấu)
+          for (const hpSocket of hitRoot.userData.holes) {
+            const hpSocketPos = getWorldSocketPosition(hitRoot, hpSocket);
+            if (hpSocketPos.distanceTo(hit.point) < 0.35) {
+              isPenetratingHole = true;
+              break;
+            }
+          }
+
+          // Nếu đâm trúng tường đặc (không có lỗ ở phía bên kia) -> Chặn kết nối!
+          if (!isPenetratingHole) return true;
+        } else {
+          // Đâm vào vật thể không có dữ liệu lỗ -> Chặn kết nối!
+          return true; 
+        }
+      }
+
+      return false; // Đường đi hoàn toàn thông thoáng hoặc đi qua các lỗ hợp lệ
+    }
+
     function findNearestPinSnap(pin, maxDistance = 1.0) {
       const pinSockets = pin.userData.holes || [];
       let nearest = null;
@@ -154,17 +219,13 @@ function getWorldSocketPosition(part, socket) {
 
       return nearest;
     }
-
     function findNearestAssemblySnap(draggedPart, maxDistance = 1.0) {
-      // 1. Phân tách chuẩn xác CỤM ĐANG KÉO (draggedGroup) và PHẦN CÒN LẠI (targetGroup)
       const draggedGroup = new Set();
       if (draggedPart.parent && draggedPart.parent.userData?.isAssemblyGroup) {
-        // FIX LỖI "MÙ CHỐT": Dùng lệnh traverse để quét đệ quy rễ cây, moi bằng hết các linh kiện lồng nhau bên trong cụm
         draggedPart.parent.traverse(child => {
           if (parts.includes(child)) draggedGroup.add(child);
         });
       } else {
-        // Nắm linh kiện lẻ
         draggedGroup.add(draggedPart);
       }
 
@@ -176,17 +237,12 @@ function getWorldSocketPosition(part, socket) {
       const targetComponents = targetGroup.filter(p => !p.userData?.isPin && p.userData?.holes?.length);
 
       let nearest = null;
+      const PIN_PENETRATION_DEPTH = 0.95;
 
-      // 2. Phe Kéo (Chốt / Pin) đi tìm Phe Đích (Lỗ / Component)
+      // 1. Cầm Chốt (Pin) lắp vào Lỗ trên Thanh dầm hoặc Thiết bị
       draggedPins.forEach(pin => {
         pin.updateMatrixWorld(true);
         const pinWorldPosition = pin.getWorldPosition(new THREE.Vector3());
-        
-        const pinBounds = new THREE.Box3();
-        pin.traverse(child => { 
-          if (child.isMesh && !child.userData.isBadge && child.parent?.name !== 'badges') pinBounds.expandByObject(child); 
-        });
-        const pinBottomOffset = pinBounds.min.y - pinWorldPosition.y;
 
         (pin.userData.holes || []).forEach(pinSocket => {
           targetComponents.forEach(targetPart => {
@@ -207,8 +263,15 @@ function getWorldSocketPosition(part, socket) {
               
               const distance = pinWorldPosition.distanceTo(desiredWorldPosition);
               const snapDistance = Math.max(maxDistance, targetPart.userData?.holesCount >= 11 ? 1.5 : 0);
+              if (distance > snapDistance) return;
+
+              // KIỂM TRA TIA LASER XUYÊN THẤU
+              targetPart.updateMatrixWorld(true);
+              const holeWorldPos = getWorldSocketPosition(targetPart, targetSocket);
+              const targetQuat = targetPart.getWorldQuaternion(new THREE.Quaternion());
+              const inwardDir = getSocketLocalNormal(targetSocket).applyQuaternion(targetQuat).negate().normalize();
               
-              if (distance > snapDistance || desiredWorldPosition.y + pinBottomOffset < -0.01) return;
+              if (isHoleBlockedBySolid(targetPart, targetSocket, draggedGroup)) return;
 
               if (!nearest || distance < nearest.distance) {
                 nearest = { ...snapCandidate, desiredWorldPosition, distance, snapType: 'pin-to-comp', activeItem: pin };
@@ -218,7 +281,7 @@ function getWorldSocketPosition(part, socket) {
         });
       });
 
-      // 3. Phe Kéo (Lỗ / Component) đi tìm Phe Đích (Chốt / Pin)
+      // 2. Cầm Thanh dầm lắp vào Chốt đang thò ra
       draggedComponents.forEach(component => {
         component.updateMatrixWorld(true);
         (component.userData.holes || []).forEach(componentSocket => {
@@ -234,18 +297,21 @@ function getWorldSocketPosition(part, socket) {
               
               const distance = componentSnapPosition.distanceTo(pinSocketPosition);
               const snapDistance = Math.max(maxDistance, component.userData?.holesCount >= 11 ? 1.5 : 0);
-              
               if (distance > snapDistance) return;
+
+              // KIỂM TRA TIA LASER XUYÊN THẤU
+              component.updateMatrixWorld(true);
+              const holeWorldPos = getWorldSocketPosition(component, componentSocket);
+              const compQuat = component.getWorldQuaternion(new THREE.Quaternion());
+              const inwardDir = getSocketLocalNormal(componentSocket).applyQuaternion(compQuat).negate().normalize();
+              
+              if (isHoleBlockedBySolid(component, componentSocket, new Set([component]))) return;
 
               if (!nearest || distance < nearest.distance) {
                 nearest = { 
-                  componentSocket, 
-                  pin, 
-                  pinSocket, 
+                  componentSocket, pin, pinSocket, 
                   pinPosition: pinSocketPosition.clone(), 
-                  distance, 
-                  snapType: 'comp-to-pin', 
-                  activeItem: component 
+                  distance, snapType: 'comp-to-pin', activeItem: component 
                 };
               }
             });
